@@ -1,0 +1,73 @@
+/* Import Tailwind core */
+@import "tailwindcss";
+
+/* 🌍 Base styles (global) */
+@layer base {
+  body {
+    font-family: "Inter", system-ui, sans-serif;
+    @apply bg-[#0B0F19] text-white min-h-screen m-0;
+  }
+
+  a {
+    @apply no-underline font-medium text-sky-400 hover:text-sky-300 transition-colors;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-bold leading-tight;
+  }
+
+  button {
+    @apply rounded-xl px-4 py-2 font-semibold bg-sky-500 hover:bg-sky-600 text-white transition-all;
+  }
+}
+
+/* 🌈 Custom animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fadeIn {
+  animation: fadeIn 1s ease-out forwards;
+}
+
+/* 🪶 Floating illustration animation */
+@keyframes float {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+.animate-float {
+  animation: float 4s ease-in-out infinite;
+}
+
+/* 🎚️ Smooth scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background-color: #2563eb;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: #1d4ed8;
+}
+
+/* ✨ Optional: smooth scrolling behavior */
+html {
+  scroll-behavior: smooth;
+}
