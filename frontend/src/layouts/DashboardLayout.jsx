@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard,
   Wallet,
@@ -6,10 +7,42 @@ import {
   BarChart3,
   TrendingUp,
   CreditCard,
+  LogOut,
+  User,
 } from "lucide-react";
 import Logo from "../assets/logo.png";
 
+/* ----------------------------- helpers (API) ------------------------------ */
+async function apiFetch(path, options = {}) {
+  const base = import.meta.env.VITE_API_URL;
+  if (!base) throw new Error("Missing VITE_API_URL in frontend .env");
+
+  const token = localStorage.getItem("token");
+
+  const res = await fetch(`${base}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
+  }
+
+  if (!res.ok) throw new Error(data.message || "Request failed");
+  return data;
+}
+
 export default function DashboardLayout() {
+  const navigate = useNavigate();
+
   const navItems = [
     {
       name: "Dashboard",
@@ -35,6 +68,46 @@ export default function DashboardLayout() {
     { name: "Debt", path: "/debt", icon: <CreditCard className="w-5 h-5" /> },
   ];
 
+  const [session, setSession] = useState({
+    loading: true,
+    user: null,
+  });
+
+  const logout = () => {
+    localStorage.removeItem("token");
+    navigate("/login", { replace: true });
+  };
+
+  useEffect(() => {
+    const checkSession = async () => {
+      const token = localStorage.getItem("token");
+      if (!token) {
+        navigate("/login", { replace: true });
+        return;
+      }
+
+      try {
+        const res = await apiFetch("/api/auth/me");
+        setSession({ loading: false, user: res.user || null });
+      } catch {
+        localStorage.removeItem("token");
+        navigate("/login", { replace: true });
+      }
+    };
+
+    checkSession();
+  }, [navigate]);
+
+  if (session.loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-b from-[#f5f8ff] via-[#e9f1ff] to-[#dbe8ff] font-inter">
+        <div className="bg-white/90 border border-gray-200 shadow-sm rounded-2xl px-6 py-5 text-sm text-gray-700">
+          Checking session...
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-gradient-to-b from-[#f5f8ff] via-[#e9f1ff] to-[#dbe8ff] font-inter">
       {/* NAVBAR */}
@@ -52,8 +125,8 @@ export default function DashboardLayout() {
             </span>
           </div>
 
-          {/* ---- RIGHT: NAV ITEMS (DESKTOP) ---- */}
-          <div className="hidden md:flex items-center gap-6">
+          {/* ---- RIGHT: NAV ITEMS (DESKTOP) + USER + LOGOUT ---- */}
+          <div className="hidden md:flex items-center gap-2">
             {navItems.map((item) => (
               <NavLink
                 key={item.path}
@@ -71,34 +144,65 @@ export default function DashboardLayout() {
                 {item.name}
               </NavLink>
             ))}
+
+            {/* User + Logout */}
+            <div className="ml-3 flex items-center gap-2 pl-3 border-l border-gray-200">
+              <div className="hidden lg:flex items-center gap-2 px-3 py-2 rounded-lg bg-white/70 border border-gray-200">
+                <User className="w-4 h-4 text-gray-600" />
+                <span className="text-sm text-gray-700">
+                  {session.user?.fullName || session.user?.name || "User"}
+                </span>
+              </div>
+
+              <button
+                onClick={logout}
+                className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition"
+                title="Logout"
+                type="button"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden lg:inline">Logout</span>
+              </button>
+            </div>
           </div>
         </nav>
 
         {/* ---- MOBILE NAV ---- */}
-        <div className="md:hidden flex overflow-x-auto px-4 pb-2 gap-4">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={({ isActive }) =>
-                `flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 
-                ${
-                  isActive
-                    ? "bg-sky-200 text-sky-700"
-                    : "bg-white text-gray-600 border border-gray-200"
-                }`
-              }
-            >
-              {item.icon}
-              {item.name}
-            </NavLink>
-          ))}
+        <div className="md:hidden flex items-center justify-between gap-3 px-4 pb-2">
+          <div className="flex overflow-x-auto gap-4">
+            {navItems.map((item) => (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                className={({ isActive }) =>
+                  `flex-shrink-0 px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 
+                  ${
+                    isActive
+                      ? "bg-sky-200 text-sky-700"
+                      : "bg-white text-gray-600 border border-gray-200"
+                  }`
+                }
+              >
+                {item.icon}
+                {item.name}
+              </NavLink>
+            ))}
+          </div>
+
+          <button
+            onClick={logout}
+            className="flex-shrink-0 inline-flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-semibold bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 transition"
+            title="Logout"
+            type="button"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </header>
 
       {/* MAIN CONTENT */}
       <main className="flex-1 w-full px-6 md:px-12 py-10">
-        <Outlet />
+        <Outlet context={{ user: session.user }} />
       </main>
     </div>
   );

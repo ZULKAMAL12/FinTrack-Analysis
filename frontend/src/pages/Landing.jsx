@@ -11,7 +11,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import illustration from "../assets/finance-illustration.svg";
-import Logo from "../assets/FullLogo.png"; // logo
+import Logo from "../assets/FullLogo.png"; // <-- LOGO
 
 export default function Landing() {
   return (
