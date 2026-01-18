@@ -1,459 +1,1348 @@
-import { useState, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
   PiggyBank,
-  TrendingUp,
   RefreshCw,
   Settings,
   Pencil,
   MinusCircle,
-  ArrowDownCircle,
-  ArrowUpCircle,
-  Trophy,
+  X,
+  Loader2,
+  CloudOff,
+  Trash2,
+  Wallet,
+  LineChart as LineIcon,
+  PieChart as PieIcon,
 } from "lucide-react";
+
 import {
   AreaChart,
   Area,
   XAxis,
   YAxis,
   CartesianGrid,
-  Tooltip,
   ResponsiveContainer,
   Legend,
+  Tooltip,
+  PieChart,
+  Pie,
+  Cell,
 } from "recharts";
 
+/* ----------------------------- helpers (API) ------------------------------ */
+async function apiFetch(path, options = {}) {
+  const base = import.meta.env.VITE_API_URL;
+  if (!base) throw new Error("Missing VITE_API_URL in frontend .env");
+
+  const token = localStorage.getItem("token");
+
+  const res = await fetch(`${base}${path}`, {
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(options.headers || {}),
+    },
+  });
+
+  const text = await res.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = {};
+  }
+
+  if (!res.ok) throw new Error(data.message || "Request failed");
+  return data;
+}
+
+/* ---------------------------- Return frequency ---------------------------- */
+const RETURN_FREQ = [
+  { value: "daily", label: "Daily (Versa/TNG)", periodsPerYear: 365 },
+  { value: "weekly", label: "Weekly", periodsPerYear: 52 },
+  { value: "monthly", label: "Monthly", periodsPerYear: 12 },
+  { value: "yearly", label: "Yearly (ASB/KWSP)", periodsPerYear: 1 },
+];
+
+function safeNumber(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function formatRM(n) {
+  const v = safeNumber(n, 0);
+  return `RM ${v.toLocaleString("en-MY", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
+}
+
+/**
+ * Estimate periodic return amount (simple):
+ * annualReturn = capital * rate%
+ * periodicReturn = annualReturn / periodsPerYear
+ */
+function estimateReturn(capital, ratePercent, freq) {
+  const cap = safeNumber(capital, 0);
+  const rate = safeNumber(ratePercent, 0);
+  if (cap <= 0 || rate <= 0) return 0;
+
+  const annual = cap * (rate / 100);
+
+  switch (freq) {
+    case "daily":
+      return annual / 365;
+    case "weekly":
+      return annual / 52;
+    case "monthly":
+      return annual / 12;
+    case "yearly":
+    default:
+      return annual;
+  }
+}
+
+/**
+ * Build a 12-month projection for TOTAL portfolio:
+ * - Each month: add monthlyContribution for each account
+ * - Add estimated returns (converted to monthly)
+ *
+ * This is a simple projection (not perfect compounding like real platforms),
+ * but it's consistent + useful for planning.
+ */
+function buildProjection12M(accounts) {
+  const months = [];
+  const now = new Date();
+
+  // start value: total portfolio value now
+  let totalValue = accounts.reduce(
+    (sum, a) => sum + safeNumber(a.capital) + safeNumber(a.dividend),
+    0
+  );
+
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
+    const label = d.toLocaleString("en", { month: "short" });
+
+    // monthly add from all accounts
+    const monthlyAdd = accounts.reduce(
+      (sum, a) => sum + safeNumber(a.monthlyContribution),
+      0
+    );
+
+    // monthly estimated return from all accounts (convert their freq to monthly)
+    const monthlyReturn = accounts.reduce((sum, a) => {
+      const cap = safeNumber(a.capital);
+      const rate = safeNumber(a.ratePercent);
+      const freq = a.returnFrequency || "daily";
+      const periodic = estimateReturn(cap, rate, freq);
+
+      // convert periodic to monthly estimate:
+      // daily*30, weekly*4.345, monthly*1, yearly/12
+      if (freq === "daily") return sum + periodic * 30;
+      if (freq === "weekly") return sum + periodic * 4.345;
+      if (freq === "monthly") return sum + periodic * 1;
+      return sum + periodic / 12; // yearly
+    }, 0);
+
+    totalValue += monthlyAdd + monthlyReturn;
+
+    months.push({
+      month: label,
+      value: Number(totalValue.toFixed(2)),
+      add: Number(monthlyAdd.toFixed(2)),
+      ret: Number(monthlyReturn.toFixed(2)),
+    });
+  }
+
+  return months;
+}
+
+/* ------------------------------- Component -------------------------------- */
 export default function SavingsPage() {
-  const [editing, setEditing] = useState(null);
-  const [withdrawing, setWithdrawing] = useState(null);
-  const [view, setView] = useState("monthly");
+  const [status, setStatus] = useState({
+    loading: true,
+    saving: false,
+    error: "",
+    offlineSaveError: false,
+  });
 
-  const [savings, setSavings] = useState([
-    {
-      id: 1,
-      account: "ASB",
-      color: "#0ea5e9",
-      type: "manual",
-      autoSave: true,
-      autoAmount: 200,
-      capital: 5200,
-      dividend: 350,
-      goal: 10000,
-      history: [
-        { type: "deposit", amount: 200, date: "2025-11-01" },
-        { type: "auto", amount: 200, date: "2025-10-01" },
-        { type: "withdraw", amount: 100, date: "2025-09-10" },
-      ],
-    },
-    {
-      id: 2,
-      account: "Versa-i",
-      color: "#22c55e",
-      type: "api",
-      autoSave: false,
-      autoAmount: 0,
-      capital: 2100,
-      dividend: 120,
-      goal: 5000,
-      history: [
-        { type: "auto", amount: 100, date: "2025-11-10" },
-        { type: "dividend", amount: 20, date: "2025-11-09" },
-      ],
-    },
-    {
-      id: 3,
-      account: "Touch ‘n Go GO+",
-      color: "#f59e0b",
-      type: "api",
-      autoSave: true,
-      autoAmount: 100,
-      capital: 1600,
-      dividend: 60,
-      goal: 3000,
-      history: [
-        { type: "auto", amount: 100, date: "2025-11-02" },
-        { type: "dividend", amount: 3, date: "2025-11-11" },
-      ],
-    },
-  ]);
+  const [accounts, setAccounts] = useState([]);
+  const didHydrateRef = useRef(false);
 
+  // Modals
+  const [addModal, setAddModal] = useState({
+    open: false,
+    name: "",
+    color: "#0ea5e9",
+    goal: "",
+    initialCapital: "",
+    ratePercent: "",
+    returnFrequency: "daily",
+    monthlyContribution: "",
+    autoSave: false,
+    autoAmount: "",
+    error: "",
+  });
+
+  const [editModal, setEditModal] = useState({
+    open: false,
+    id: null,
+    name: "",
+    color: "#0ea5e9",
+    goal: "",
+    initialCapital: "",
+    ratePercent: "",
+    returnFrequency: "daily",
+    monthlyContribution: "",
+    autoSave: false,
+    autoAmount: "",
+    error: "",
+  });
+
+  const [withdrawModal, setWithdrawModal] = useState({
+    open: false,
+    id: null,
+    name: "",
+    amount: "",
+    error: "",
+  });
+
+  const [deleteModal, setDeleteModal] = useState({
+    open: false,
+    id: null,
+    name: "",
+    error: "",
+  });
+
+  async function loadSavings() {
+    setStatus((s) => ({
+      ...s,
+      loading: true,
+      error: "",
+      offlineSaveError: false,
+    }));
+
+    try {
+      const res = await apiFetch("/api/savings");
+      setAccounts(Array.isArray(res.accounts) ? res.accounts : []);
+      didHydrateRef.current = true;
+      setStatus((s) => ({ ...s, loading: false }));
+    } catch (e) {
+      setStatus((s) => ({
+        ...s,
+        loading: false,
+        error: e?.message || "Failed to load savings.",
+      }));
+    }
+  }
+
+  useEffect(() => {
+    didHydrateRef.current = false;
+    loadSavings();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /* -------------------------------- Totals -------------------------------- */
   const totals = useMemo(() => {
-    const capital = savings.reduce((a, b) => a + b.capital, 0);
-    const dividend = savings.reduce((a, b) => a + b.dividend, 0);
-    return {
-      capital,
-      dividend,
-      total: capital + dividend,
-      roi: ((dividend / capital) * 100).toFixed(2),
+    const capital = accounts.reduce((a, b) => a + safeNumber(b.capital), 0);
+    const dividend = accounts.reduce((a, b) => a + safeNumber(b.dividend), 0);
+    const total = capital + dividend;
+    const roi = capital > 0 ? (dividend / capital) * 100 : 0;
+    return { capital, dividend, total, roi };
+  }, [accounts]);
+
+  /* ----------------------------- Charts data ------------------------------ */
+  const allocationData = useMemo(() => {
+    return accounts
+      .map((a) => {
+        const value = safeNumber(a.capital) + safeNumber(a.dividend);
+        return {
+          name: a.name || "Untitled",
+          value,
+          color: a.color || "#0ea5e9",
+        };
+      })
+      .filter((x) => x.value > 0);
+  }, [accounts]);
+
+  const projection12m = useMemo(() => buildProjection12M(accounts), [accounts]);
+
+  /* ----------------------------- Modal Actions ----------------------------- */
+  function openAddAccount() {
+    setAddModal({
+      open: true,
+      name: "",
+      color: "#0ea5e9",
+      goal: "",
+      initialCapital: "",
+      ratePercent: "",
+      returnFrequency: "daily",
+      monthlyContribution: "",
+      autoSave: false,
+      autoAmount: "",
+      error: "",
+    });
+  }
+
+  async function createAccount(e) {
+    e.preventDefault();
+
+    const name = addModal.name.trim();
+    if (!name)
+      return setAddModal((m) => ({ ...m, error: "Account name is required." }));
+
+    const payload = {
+      name,
+      color: addModal.color,
+      goal: safeNumber(addModal.goal, 0),
+      autoSave: !!addModal.autoSave,
+      autoAmount: safeNumber(addModal.autoAmount, 0),
+
+      initialCapital: safeNumber(addModal.initialCapital, 0),
+      ratePercent: safeNumber(addModal.ratePercent, 0),
+      returnFrequency: addModal.returnFrequency || "daily",
+      monthlyContribution: safeNumber(addModal.monthlyContribution, 0),
     };
-  }, [savings]);
 
-  const toggleAutoSave = (id) => {
-    setSavings((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, autoSave: !s.autoSave } : s))
-    );
-  };
+    setStatus((s) => ({
+      ...s,
+      saving: true,
+      error: "",
+      offlineSaveError: false,
+    }));
+    try {
+      const res = await apiFetch("/api/savings", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
 
-  const handleEdit = (account) => setEditing(account);
-  const handleWithdraw = (account) => setWithdrawing(account);
+      setAccounts((prev) => [res.account, ...prev]);
+      setAddModal((m) => ({ ...m, open: false }));
+      setStatus((s) => ({ ...s, saving: false }));
+    } catch (e2) {
+      setStatus((s) => ({ ...s, saving: false, offlineSaveError: true }));
+      setAddModal((m) => ({
+        ...m,
+        error: e2?.message || "Failed to create account.",
+      }));
+    }
+  }
 
-  const saveEdit = () => {
-    if (!editing) return;
-    setSavings((prev) => prev.map((s) => (s.id === editing.id ? editing : s)));
-    setEditing(null);
-  };
+  function openEditAccount(acc) {
+    setEditModal({
+      open: true,
+      id: acc._id,
+      name: acc.name || "",
+      color: acc.color || "#0ea5e9",
+      goal: String(safeNumber(acc.goal)),
+      autoSave: !!acc.autoSave,
+      autoAmount: String(safeNumber(acc.autoAmount)),
 
-  const saveWithdraw = () => {
-    if (!withdrawing) return;
-    const amount = parseFloat(withdrawing.amount);
-    if (isNaN(amount) || amount <= 0) return alert("Invalid amount");
-    setSavings((prev) =>
-      prev.map((s) =>
-        s.id === withdrawing.id
-          ? {
-              ...s,
-              capital: s.capital - amount,
-              history: [
-                ...s.history,
-                { type: "withdraw", amount, date: new Date().toISOString() },
-              ],
-            }
-          : s
-      )
-    );
-    setWithdrawing(null);
-  };
+      initialCapital: String(safeNumber(acc.initialCapital)),
+      ratePercent: String(safeNumber(acc.ratePercent)),
+      returnFrequency: acc.returnFrequency || "daily",
+      monthlyContribution: String(safeNumber(acc.monthlyContribution)),
+      error: "",
+    });
+  }
 
+  async function saveEditAccount(e) {
+    e.preventDefault();
+
+    const name = editModal.name.trim();
+    if (!name)
+      return setEditModal((m) => ({
+        ...m,
+        error: "Account name is required.",
+      }));
+
+    const payload = {
+      name,
+      color: editModal.color,
+      goal: safeNumber(editModal.goal, 0),
+      autoSave: !!editModal.autoSave,
+      autoAmount: safeNumber(editModal.autoAmount, 0),
+
+      initialCapital: safeNumber(editModal.initialCapital, 0),
+      ratePercent: safeNumber(editModal.ratePercent, 0),
+      returnFrequency: editModal.returnFrequency || "daily",
+      monthlyContribution: safeNumber(editModal.monthlyContribution, 0),
+    };
+
+    setStatus((s) => ({
+      ...s,
+      saving: true,
+      error: "",
+      offlineSaveError: false,
+    }));
+    try {
+      const res = await apiFetch(`/api/savings/${editModal.id}`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+
+      setAccounts((prev) =>
+        prev.map((a) => (a._id === res.account._id ? res.account : a))
+      );
+      setEditModal((m) => ({ ...m, open: false }));
+      setStatus((s) => ({ ...s, saving: false }));
+    } catch (e2) {
+      setStatus((s) => ({ ...s, saving: false, offlineSaveError: true }));
+      setEditModal((m) => ({
+        ...m,
+        error: e2?.message || "Failed to update account.",
+      }));
+    }
+  }
+
+  function openWithdraw(acc) {
+    setWithdrawModal({
+      open: true,
+      id: acc._id,
+      name: acc.name,
+      amount: "",
+      error: "",
+    });
+  }
+
+  async function confirmWithdraw(e) {
+    e.preventDefault();
+
+    const amount = safeNumber(withdrawModal.amount, -1);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return setWithdrawModal((m) => ({
+        ...m,
+        error: "Enter a valid amount (> 0).",
+      }));
+    }
+
+    setStatus((s) => ({
+      ...s,
+      saving: true,
+      error: "",
+      offlineSaveError: false,
+    }));
+    try {
+      const res = await apiFetch(
+        `/api/savings/${withdrawModal.id}/transactions`,
+        {
+          method: "POST",
+          body: JSON.stringify({ type: "withdraw", amount }),
+        }
+      );
+
+      setAccounts((prev) =>
+        prev.map((a) => (a._id === res.account._id ? res.account : a))
+      );
+      setWithdrawModal((m) => ({ ...m, open: false }));
+      setStatus((s) => ({ ...s, saving: false }));
+    } catch (e2) {
+      setStatus((s) => ({ ...s, saving: false, offlineSaveError: true }));
+      setWithdrawModal((m) => ({
+        ...m,
+        error: e2?.message || "Withdraw failed.",
+      }));
+    }
+  }
+
+  async function toggleAutoSave(acc) {
+    setStatus((s) => ({
+      ...s,
+      saving: true,
+      error: "",
+      offlineSaveError: false,
+    }));
+    try {
+      const res = await apiFetch(`/api/savings/${acc._id}`, {
+        method: "PUT",
+        body: JSON.stringify({ autoSave: !acc.autoSave }),
+      });
+
+      setAccounts((prev) =>
+        prev.map((a) => (a._id === res.account._id ? res.account : a))
+      );
+      setStatus((s) => ({ ...s, saving: false }));
+    } catch (e2) {
+      setStatus((s) => ({
+        ...s,
+        saving: false,
+        error: e2?.message || "Failed to toggle auto save.",
+        offlineSaveError: true,
+      }));
+    }
+  }
+
+  function openDelete(acc) {
+    setDeleteModal({
+      open: true,
+      id: acc._id,
+      name: acc.name,
+      error: "",
+    });
+  }
+
+  async function confirmDelete() {
+    if (!deleteModal.id) return;
+
+    setStatus((s) => ({
+      ...s,
+      saving: true,
+      error: "",
+      offlineSaveError: false,
+    }));
+
+    try {
+      await apiFetch(`/api/savings/${deleteModal.id}`, {
+        method: "DELETE",
+      });
+
+      setAccounts((prev) => prev.filter((a) => a._id !== deleteModal.id));
+      setDeleteModal({ open: false, id: null, name: "", error: "" });
+      setStatus((s) => ({ ...s, saving: false }));
+    } catch (e) {
+      setStatus((s) => ({ ...s, saving: false, offlineSaveError: true }));
+      setDeleteModal((m) => ({
+        ...m,
+        error: e?.message || "Delete failed.",
+      }));
+    }
+  }
+
+  /* ---------------------------------- UI ---------------------------------- */
   return (
     <main className="min-h-screen bg-gradient-to-br from-[#f9fbff] via-[#edf4ff] to-[#e5edff] px-6 md:px-12 py-10 font-inter overflow-hidden">
       {/* Header */}
-      <header className="mb-10 flex flex-col md:flex-row justify-between items-start md:items-center">
+      <header className="mb-10 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
           <h1 className="text-4xl font-bold text-[#0b1222]">Savings Tracker</h1>
           <p className="text-gray-600 text-lg mt-1">
-            Refined, clear, and automated — track your real-world savings
-            growth.
+            Track savings accounts with return frequency (daily/monthly/yearly)
+            + contributions + withdrawals.
           </p>
         </div>
-        <button
-          onClick={() => alert("Add account feature coming soon")}
-          className="mt-4 md:mt-0 flex items-center gap-2 bg-gradient-to-r from-blue-500 to-sky-600 text-white px-5 py-2 rounded-xl shadow hover:scale-[1.03] transition"
-        >
-          <Plus className="w-4 h-4" /> Add Account
-        </button>
+
+        <div className="flex items-center gap-3">
+          {/* ✅ fixed refresh icon/text color */}
+          <button
+            onClick={() => loadSavings()}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 hover:bg-slate-50 hover:text-slate-900 transition"
+            type="button"
+          >
+            <RefreshCw className="w-4 h-4 text-slate-700" />
+            Refresh
+          </button>
+
+          <button
+            onClick={openAddAccount}
+            className="flex items-center gap-2 bg-gradient-to-r from-blue-500 to-sky-600 text-white px-5 py-2 rounded-xl shadow hover:scale-[1.03] transition"
+            type="button"
+          >
+            <Plus className="w-4 h-4" /> Add Account
+          </button>
+        </div>
       </header>
+
+      {(status.error || status.offlineSaveError) && (
+        <div className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-3 text-sm text-rose-700 flex items-center gap-2">
+          <CloudOff className="w-4 h-4" />
+          {status.error || "Backend request failed. Check server + token."}
+        </div>
+      )}
 
       {/* Summary Cards */}
       <section className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-10">
         <SummaryCard
           label="Total Capital"
           color="text-sky-600"
-          value={totals.capital}
+          value={formatRM(totals.capital)}
         />
         <SummaryCard
           label="Total Dividends"
           color="text-emerald-600"
-          value={totals.dividend}
+          value={formatRM(totals.dividend)}
         />
         <SummaryCard
           label="Total Value"
           color="text-indigo-600"
-          value={totals.total}
+          value={formatRM(totals.total)}
         />
         <SummaryCard
-          label="ROI"
+          label="ROI (actual)"
           color="text-violet-600"
-          value={`${totals.roi}%`}
+          value={`${totals.roi.toFixed(2)}%`}
         />
       </section>
 
-      {/* Smart Insight */}
-      <div className="bg-gradient-to-r from-sky-50 to-blue-100 rounded-xl p-5 mb-10 border border-blue-200 shadow-sm">
-        <p className="text-gray-700 text-sm leading-relaxed">
-          💡 <strong>Insight:</strong> You’ve reached{" "}
-          <span className="text-blue-600 font-semibold">
-            {((totals.capital / 15000) * 100).toFixed(1)}%
-          </span>{" "}
-          of your total savings goal — steady growth ahead!
-        </p>
-      </div>
-
-      {/* Chart Section */}
-      <section className="bg-white/90 backdrop-blur-lg rounded-2xl border border-gray-100 p-6 mb-12 shadow-lg">
-        <div className="flex justify-between items-center mb-4">
-          <h2 className="text-2xl font-semibold text-[#0b1222] flex items-center gap-2">
-            <TrendingUp className="w-5 h-5 text-blue-600" /> Growth Overview
-          </h2>
-          <div className="flex gap-2">
-            {["monthly", "yearly"].map((v) => (
-              <button
-                key={v}
-                onClick={() => setView(v)}
-                className={`px-4 py-1 rounded-lg text-sm font-medium transition ${
-                  view === v
-                    ? "bg-gradient-to-r from-blue-500 to-sky-600 text-white"
-                    : "bg-gray-100 text-gray-600"
-                }`}
-              >
-                {v.charAt(0).toUpperCase() + v.slice(1)}
-              </button>
-            ))}
+      {/* Charts */}
+      <section className="grid lg:grid-cols-2 gap-8 mb-12">
+        {/* Allocation */}
+        <div className="bg-white/90 backdrop-blur-lg rounded-2xl border border-gray-100 p-6 shadow-lg">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold text-[#0b1222] flex items-center gap-2">
+              <PieIcon className="w-5 h-5 text-indigo-600" /> Allocation
+            </h2>
+            <p className="text-xs text-slate-500">Current total by account</p>
           </div>
+
+          {allocationData.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-slate-700">
+              No allocation yet (add accounts / balances).
+            </div>
+          ) : (
+            <div className="h-[280px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={allocationData}
+                    dataKey="value"
+                    nameKey="name"
+                    innerRadius={60}
+                    outerRadius={105}
+                    paddingAngle={3}
+                    label={({ name, value }) => `${name}: ${formatRM(value)}`}
+                  >
+                    {allocationData.map((x, i) => (
+                      <Cell key={i} fill={x.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    formatter={(value) => formatRM(value)}
+                    contentStyle={{ borderRadius: 12 }}
+                  />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+          )}
         </div>
 
-        <div className="h-[320px]">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart
-              data={[
-                { month: "Jun", ASB: 4800, Versa: 1900, TNG: 1300 },
-                { month: "Jul", ASB: 5000, Versa: 1950, TNG: 1400 },
-                { month: "Aug", ASB: 5200, Versa: 2000, TNG: 1500 },
-                { month: "Sep", ASB: 5400, Versa: 2050, TNG: 1550 },
-                { month: "Oct", ASB: 5600, Versa: 2100, TNG: 1600 },
-              ]}
-            >
-              <defs>
-                <linearGradient id="colorASB" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.8} />
-                  <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0.1} />
-                </linearGradient>
-                <linearGradient id="colorVersa" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#22c55e" stopOpacity={0.8} />
-                  <stop offset="95%" stopColor="#22c55e" stopOpacity={0.1} />
-                </linearGradient>
-                <linearGradient id="colorTNG" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.8} />
-                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0.1} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-              <XAxis dataKey="month" stroke="#64748b" />
-              <YAxis stroke="#94a3b8" />
-              <Tooltip />
-              <Legend />
-              <Area
-                type="monotone"
-                dataKey="ASB"
-                stroke="#0ea5e9"
-                fill="url(#colorASB)"
-              />
-              <Area
-                type="monotone"
-                dataKey="Versa"
-                stroke="#22c55e"
-                fill="url(#colorVersa)"
-              />
-              <Area
-                type="monotone"
-                dataKey="TNG"
-                stroke="#f59e0b"
-                fill="url(#colorTNG)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+        {/* Projection */}
+        <div className="bg-white/90 backdrop-blur-lg rounded-2xl border border-gray-100 p-6 shadow-lg">
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-lg font-semibold text-[#0b1222] flex items-center gap-2">
+              <LineIcon className="w-5 h-5 text-sky-600" /> 12-Month Projection
+            </h2>
+            <p className="text-xs text-slate-500">
+              Based on contributions + estimated returns
+            </p>
+          </div>
+
+          <div className="h-[280px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={projection12m}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis dataKey="month" stroke="#64748b" />
+                <YAxis stroke="#94a3b8" />
+                <Tooltip
+                  formatter={(v, k) => {
+                    if (k === "value") return [formatRM(v), "Projected total"];
+                    if (k === "add") return [formatRM(v), "Monthly add"];
+                    if (k === "ret") return [formatRM(v), "Est. return"];
+                    return [v, k];
+                  }}
+                  contentStyle={{ borderRadius: 12 }}
+                />
+                <Legend />
+                <Area
+                  type="monotone"
+                  dataKey="value"
+                  stroke="#0ea5e9"
+                  fill="#0ea5e9"
+                  fillOpacity={0.15}
+                  name="Projected Total"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
+            <MiniStat
+              label="This month add"
+              value={formatRM(projection12m?.[0]?.add || 0)}
+              icon={<Wallet className="w-4 h-4 text-slate-700" />}
+            />
+            <MiniStat
+              label="This month return"
+              value={formatRM(projection12m?.[0]?.ret || 0)}
+              icon={<PiggyBank className="w-4 h-4 text-slate-700" />}
+            />
+            <MiniStat
+              label="12M total"
+              value={formatRM(projection12m?.[11]?.value || totals.total)}
+              icon={<LineIcon className="w-4 h-4 text-slate-700" />}
+            />
+          </div>
         </div>
       </section>
 
       {/* Accounts */}
-      <section className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
-        {savings.map((s) => (
-          <SavingsCard
-            key={s.id}
-            s={s}
-            onEdit={() => handleEdit(s)}
-            onWithdraw={() => handleWithdraw(s)}
-            toggleAutoSave={() => toggleAutoSave(s.id)}
-          />
-        ))}
-      </section>
+      {status.loading ? (
+        <div className="flex items-center gap-2 text-slate-600">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Loading savings accounts...
+        </div>
+      ) : (
+        <section className="grid md:grid-cols-2 lg:grid-cols-3 gap-8">
+          {accounts.map((acc) => (
+            <SavingsCard
+              key={acc._id}
+              acc={acc}
+              busy={status.saving}
+              onEdit={() => openEditAccount(acc)}
+              onWithdraw={() => openWithdraw(acc)}
+              onToggleAuto={() => toggleAutoSave(acc)}
+              onDelete={() => openDelete(acc)}
+            />
+          ))}
 
-      {/* Edit Modal */}
-      {editing && (
+          {accounts.length === 0 && (
+            <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-6 text-slate-700">
+              No savings accounts yet. Click <b>Add Account</b> to create one.
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* ---------------------------- Add Account Modal ---------------------------- */}
+      {addModal.open && (
         <Modal
-          title={`Edit ${editing.account}`}
-          onClose={() => setEditing(null)}
+          title="Add Savings Account"
+          onClose={() => setAddModal((m) => ({ ...m, open: false }))}
         >
-          <label className="block text-sm text-gray-600 mt-2">
-            Capital (RM)
-            <input
-              type="number"
-              value={editing.capital}
-              onChange={(e) =>
-                setEditing({ ...editing, capital: parseFloat(e.target.value) })
-              }
-              className="mt-1 w-full border rounded-lg px-3 py-2"
-            />
-          </label>
-          <label className="block text-sm text-gray-600 mt-2">
-            Auto Save (RM/month)
-            <input
-              type="number"
-              value={editing.autoAmount}
-              onChange={(e) =>
-                setEditing({
-                  ...editing,
-                  autoAmount: parseFloat(e.target.value),
-                })
-              }
-              className="mt-1 w-full border rounded-lg px-3 py-2"
-            />
-          </label>
-          <button
-            onClick={saveEdit}
-            className="mt-4 bg-gradient-to-r from-blue-500 to-sky-600 text-white w-full py-2 rounded-lg hover:opacity-90 transition"
-          >
-            Save Changes
-          </button>
+          {addModal.error && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 mb-3">
+              {addModal.error}
+            </div>
+          )}
+
+          <form onSubmit={createAccount} className="space-y-3">
+            <Field label="Account Name">
+              <input
+                value={addModal.name}
+                onChange={(e) =>
+                  setAddModal((m) => ({
+                    ...m,
+                    name: e.target.value,
+                    error: "",
+                  }))
+                }
+                className="mt-1 w-full border rounded-lg px-3 py-2"
+                placeholder="ASB / Versa-i / KWSP / Emergency Fund"
+              />
+            </Field>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Color">
+                <input
+                  type="color"
+                  value={addModal.color}
+                  onChange={(e) =>
+                    setAddModal((m) => ({ ...m, color: e.target.value }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2 h-[42px]"
+                />
+              </Field>
+
+              <Field label="Goal (RM)">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={addModal.goal}
+                  onChange={(e) =>
+                    setAddModal((m) => ({ ...m, goal: e.target.value }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2"
+                  placeholder="5000"
+                />
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Starting Balance (RM)">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={addModal.initialCapital}
+                  onChange={(e) =>
+                    setAddModal((m) => ({
+                      ...m,
+                      initialCapital: e.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2"
+                  placeholder="10000"
+                />
+              </Field>
+
+              <Field label="Expected Rate (% p.a.)">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={addModal.ratePercent}
+                  onChange={(e) =>
+                    setAddModal((m) => ({ ...m, ratePercent: e.target.value }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2"
+                  placeholder="3.14"
+                />
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Return Frequency">
+                <select
+                  value={addModal.returnFrequency}
+                  onChange={(e) =>
+                    setAddModal((m) => ({
+                      ...m,
+                      returnFrequency: e.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2 bg-white"
+                >
+                  {RETURN_FREQ.map((f) => (
+                    <option key={f.value} value={f.value}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Monthly Contribution (RM)">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={addModal.monthlyContribution}
+                  onChange={(e) =>
+                    setAddModal((m) => ({
+                      ...m,
+                      monthlyContribution: e.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2"
+                  placeholder="200"
+                />
+              </Field>
+            </div>
+
+            <div className="flex items-center justify-between rounded-xl border bg-slate-50 px-3 py-2">
+              <div className="flex items-center gap-2 text-slate-600">
+                <Settings className="w-4 h-4" />
+                Auto Save
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setAddModal((m) => ({ ...m, autoSave: !m.autoSave }))
+                }
+                className={`px-3 py-1 rounded-lg text-sm font-medium ${
+                  addModal.autoSave
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-gray-100 text-gray-600"
+                }`}
+              >
+                {addModal.autoSave ? "ON" : "OFF"}
+              </button>
+            </div>
+
+            <Field label="Auto Amount (RM / month)">
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                value={addModal.autoAmount}
+                onChange={(e) =>
+                  setAddModal((m) => ({ ...m, autoAmount: e.target.value }))
+                }
+                className="mt-1 w-full border rounded-lg px-3 py-2"
+                placeholder="200"
+                disabled={!addModal.autoSave}
+              />
+            </Field>
+
+            <button
+              type="submit"
+              disabled={status.saving}
+              className="mt-2 bg-gradient-to-r from-blue-500 to-sky-600 text-white w-full py-2 rounded-lg hover:opacity-90 transition flex items-center justify-center gap-2"
+            >
+              {status.saving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Plus className="w-4 h-4" />
+              )}
+              Create Account
+            </button>
+          </form>
         </Modal>
       )}
 
-      {/* Withdraw Modal */}
-      {withdrawing && (
+      {/* ---------------------------- Edit Account Modal ---------------------------- */}
+      {editModal.open && (
         <Modal
-          title={`Withdraw from ${withdrawing.account}`}
-          onClose={() => setWithdrawing(null)}
+          title={`Edit ${editModal.name || "Account"}`}
+          onClose={() => setEditModal((m) => ({ ...m, open: false }))}
         >
-          <label className="block text-sm text-gray-600">
-            Amount to Withdraw (RM)
-            <input
-              type="number"
-              onChange={(e) =>
-                setWithdrawing({ ...withdrawing, amount: e.target.value })
+          {editModal.error && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 mb-3">
+              {editModal.error}
+            </div>
+          )}
+
+          <form onSubmit={saveEditAccount} className="space-y-3">
+            <Field label="Account Name">
+              <input
+                value={editModal.name}
+                onChange={(e) =>
+                  setEditModal((m) => ({
+                    ...m,
+                    name: e.target.value,
+                    error: "",
+                  }))
+                }
+                className="mt-1 w-full border rounded-lg px-3 py-2"
+              />
+            </Field>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Color">
+                <input
+                  type="color"
+                  value={editModal.color}
+                  onChange={(e) =>
+                    setEditModal((m) => ({ ...m, color: e.target.value }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2 h-[42px]"
+                />
+              </Field>
+
+              <Field label="Goal (RM)">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={editModal.goal}
+                  onChange={(e) =>
+                    setEditModal((m) => ({ ...m, goal: e.target.value }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2"
+                />
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Starting Balance (RM)">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={editModal.initialCapital}
+                  onChange={(e) =>
+                    setEditModal((m) => ({
+                      ...m,
+                      initialCapital: e.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2"
+                />
+              </Field>
+
+              <Field label="Expected Rate (% p.a.)">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={editModal.ratePercent}
+                  onChange={(e) =>
+                    setEditModal((m) => ({ ...m, ratePercent: e.target.value }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2"
+                />
+              </Field>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Return Frequency">
+                <select
+                  value={editModal.returnFrequency}
+                  onChange={(e) =>
+                    setEditModal((m) => ({
+                      ...m,
+                      returnFrequency: e.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2 bg-white"
+                >
+                  {RETURN_FREQ.map((f) => (
+                    <option key={f.value} value={f.value}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Monthly Contribution (RM)">
+                <input
+                  type="number"
+                  inputMode="decimal"
+                  step="0.01"
+                  value={editModal.monthlyContribution}
+                  onChange={(e) =>
+                    setEditModal((m) => ({
+                      ...m,
+                      monthlyContribution: e.target.value,
+                    }))
+                  }
+                  className="mt-1 w-full border rounded-lg px-3 py-2"
+                />
+              </Field>
+            </div>
+
+            <div className="flex items-center justify-between rounded-xl border bg-slate-50 px-3 py-2">
+              <div className="flex items-center gap-2 text-slate-600">
+                <Settings className="w-4 h-4" />
+                Auto Save
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  setEditModal((m) => ({ ...m, autoSave: !m.autoSave }))
+                }
+                className={`px-3 py-1 rounded-lg text-sm font-medium ${
+                  editModal.autoSave
+                    ? "bg-emerald-100 text-emerald-700"
+                    : "bg-gray-100 text-gray-600"
+                }`}
+              >
+                {editModal.autoSave ? "ON" : "OFF"}
+              </button>
+            </div>
+
+            <Field label="Auto Amount (RM / month)">
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                value={editModal.autoAmount}
+                onChange={(e) =>
+                  setEditModal((m) => ({ ...m, autoAmount: e.target.value }))
+                }
+                className="mt-1 w-full border rounded-lg px-3 py-2"
+                disabled={!editModal.autoSave}
+              />
+            </Field>
+
+            <button
+              type="submit"
+              disabled={status.saving}
+              className="mt-2 bg-gradient-to-r from-blue-500 to-sky-600 text-white w-full py-2 rounded-lg hover:opacity-90 transition flex items-center justify-center gap-2"
+            >
+              {status.saving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Pencil className="w-4 h-4" />
+              )}
+              Save Changes
+            </button>
+          </form>
+        </Modal>
+      )}
+
+      {/* ---------------------------- Withdraw Modal ---------------------------- */}
+      {withdrawModal.open && (
+        <Modal
+          title={`Withdraw from ${withdrawModal.name}`}
+          onClose={() => setWithdrawModal((m) => ({ ...m, open: false }))}
+        >
+          {withdrawModal.error && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 mb-3">
+              {withdrawModal.error}
+            </div>
+          )}
+
+          <form onSubmit={confirmWithdraw} className="space-y-3">
+            <Field label="Amount to Withdraw (RM)">
+              <input
+                type="number"
+                inputMode="decimal"
+                step="0.01"
+                value={withdrawModal.amount}
+                onChange={(e) =>
+                  setWithdrawModal((m) => ({
+                    ...m,
+                    amount: e.target.value,
+                    error: "",
+                  }))
+                }
+                className="mt-1 w-full border rounded-lg px-3 py-2"
+                placeholder="100"
+              />
+            </Field>
+
+            <button
+              type="submit"
+              disabled={status.saving}
+              className="mt-2 bg-gradient-to-r from-red-500 to-rose-600 text-white w-full py-2 rounded-lg hover:opacity-90 transition flex items-center justify-center gap-2"
+            >
+              {status.saving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <MinusCircle className="w-4 h-4" />
+              )}
+              Confirm Withdraw
+            </button>
+          </form>
+        </Modal>
+      )}
+
+      {/* ---------------------------- Delete Confirm Modal ---------------------------- */}
+      {deleteModal.open && (
+        <Modal
+          title="Delete Account"
+          onClose={() =>
+            setDeleteModal({ open: false, id: null, name: "", error: "" })
+          }
+        >
+          {deleteModal.error && (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 mb-3">
+              {deleteModal.error}
+            </div>
+          )}
+
+          <p className="text-sm text-slate-700">
+            Are you sure you want to delete <b>{deleteModal.name}</b>? <br />
+            This will remove the account and its history.
+          </p>
+
+          <div className="mt-4 flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() =>
+                setDeleteModal({ open: false, id: null, name: "", error: "" })
               }
-              className="mt-1 w-full border rounded-lg px-3 py-2"
-            />
-          </label>
-          <button
-            onClick={saveWithdraw}
-            className="mt-4 bg-gradient-to-r from-red-500 to-rose-600 text-white w-full py-2 rounded-lg hover:opacity-90 transition"
-          >
-            Confirm Withdraw
-          </button>
+              className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 transition"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={confirmDelete}
+              disabled={status.saving}
+              className="px-4 py-2 rounded-xl bg-rose-600 text-white hover:bg-rose-700 transition flex items-center gap-2"
+            >
+              {status.saving ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Trash2 className="w-4 h-4" />
+              )}
+              Delete
+            </button>
+          </div>
         </Modal>
       )}
     </main>
   );
 }
 
-/* Components */
+/* ----------------------------- UI Components ------------------------------ */
 const SummaryCard = ({ label, color, value }) => (
   <div className="bg-white/80 backdrop-blur-lg rounded-2xl p-6 border border-gray-100 shadow-sm hover:shadow-md transition">
     <p className="text-gray-500 text-sm">{label}</p>
-    <h2 className={`text-2xl font-semibold ${color}`}>RM {value}</h2>
+    <h2 className={`text-2xl font-semibold ${color}`}>{value}</h2>
   </div>
 );
 
-const SavingsCard = ({ s, onEdit, onWithdraw, toggleAutoSave }) => (
-  <div className="bg-white/95 backdrop-blur-lg rounded-2xl border border-gray-100 shadow-md p-6 hover:shadow-lg transition">
-    <div className="flex justify-between items-center mb-4">
-      <div className="flex items-center gap-3">
-        <div
-          className="p-2 rounded-lg"
-          style={{ backgroundColor: `${s.color}25` }}
-        >
-          <PiggyBank className="w-5 h-5" style={{ color: s.color }} />
+const MiniStat = ({ label, value, icon }) => (
+  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 flex items-center gap-2">
+    <div className="p-2 rounded-lg bg-white border border-slate-200">
+      {icon}
+    </div>
+    <div>
+      <p className="text-[11px] text-slate-500">{label}</p>
+      <p className="text-xs font-semibold text-slate-800">{value}</p>
+    </div>
+  </div>
+);
+
+const SavingsCard = ({
+  acc,
+  onEdit,
+  onWithdraw,
+  onToggleAuto,
+  onDelete,
+  busy,
+}) => {
+  const goal = safeNumber(acc.goal, 0);
+  const capital = safeNumber(acc.capital, 0);
+  const dividend = safeNumber(acc.dividend, 0);
+
+  const rate = safeNumber(acc.ratePercent, 0);
+  const freq = acc.returnFrequency || "daily";
+
+  const est = estimateReturn(capital, rate, freq);
+  const estLabel =
+    freq === "daily"
+      ? "≈ per day"
+      : freq === "weekly"
+      ? "≈ per week"
+      : freq === "monthly"
+      ? "≈ per month"
+      : "≈ per year";
+
+  const totalValue = capital + dividend;
+  const roi = capital > 0 ? (dividend / capital) * 100 : 0;
+  const progress = goal > 0 ? Math.min((capital / goal) * 100, 100) : 0;
+
+  return (
+    <div className="bg-white/95 backdrop-blur-lg rounded-2xl border border-gray-100 shadow-md p-6 hover:shadow-lg transition">
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex items-center gap-3">
+          <div
+            className="p-2 rounded-lg"
+            style={{ backgroundColor: `${acc.color || "#0ea5e9"}25` }}
+          >
+            <PiggyBank
+              className="w-5 h-5"
+              style={{ color: acc.color || "#0ea5e9" }}
+            />
+          </div>
+          <div>
+            <h3 className="text-lg font-semibold text-[#0b1222]">{acc.name}</h3>
+            <p className="text-xs text-slate-500">
+              {rate > 0 ? `${rate.toFixed(2)}% p.a.` : "No rate set"} •{" "}
+              <span className="font-medium">{freq.toUpperCase()}</span>
+            </p>
+          </div>
         </div>
-        <h3 className="text-lg font-semibold text-[#0b1222]">{s.account}</h3>
+
+        <div className="flex gap-2">
+          <button
+            onClick={onEdit}
+            className="p-2 bg-sky-50 text-sky-700 rounded-lg hover:bg-sky-100 transition"
+            type="button"
+            disabled={busy}
+            title="Edit"
+          >
+            <Pencil className="w-4 h-4" />
+          </button>
+
+          <button
+            onClick={onWithdraw}
+            className="p-2 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100 transition"
+            type="button"
+            disabled={busy}
+            title="Withdraw"
+          >
+            <MinusCircle className="w-4 h-4" />
+          </button>
+
+          <button
+            onClick={onDelete}
+            className="p-2 bg-slate-100 text-slate-700 rounded-lg hover:bg-slate-200 transition"
+            type="button"
+            disabled={busy}
+            title="Delete"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
       </div>
-      <div className="flex gap-2">
+
+      <div className="space-y-3">
+        <div className="flex justify-between text-sm">
+          <span className="text-gray-500">Capital</span>
+          <span className="font-semibold text-blue-600">
+            {formatRM(capital)}
+          </span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span className="text-gray-500">Dividends (actual)</span>
+          <span className="font-semibold text-emerald-600">
+            {formatRM(dividend)}
+          </span>
+        </div>
+        <div className="flex justify-between text-sm">
+          <span className="text-gray-500">Total Value</span>
+          <span className="font-semibold text-indigo-700">
+            {formatRM(totalValue)}
+          </span>
+        </div>
+
+        <div className="rounded-xl border bg-slate-50 px-3 py-2 mt-2">
+          <p className="text-xs text-slate-600">Estimated return</p>
+          <p className="text-sm font-semibold text-slate-900">
+            {formatRM(est)}{" "}
+            <span className="text-xs text-slate-500">{estLabel}</span>
+          </p>
+        </div>
+
+        <div className="flex justify-between text-xs text-slate-500 mt-2">
+          <span>ROI (actual)</span>
+          <span className="font-semibold text-slate-700">
+            {roi.toFixed(2)}%
+          </span>
+        </div>
+
+        <p className="text-sm text-gray-500 mt-2">Goal Progress</p>
+        <div className="w-full bg-gray-200 rounded-full h-2">
+          <div
+            className="h-2 bg-gradient-to-r from-blue-400 to-sky-600 rounded-full"
+            style={{ width: `${progress}%` }}
+          />
+        </div>
+        <p className="text-xs text-gray-500 text-right">
+          {goal > 0
+            ? `${progress.toFixed(1)}% of ${formatRM(goal)}`
+            : "No goal set"}
+        </p>
+      </div>
+
+      <div className="flex justify-between items-center mt-4 pt-3 border-t border-gray-200">
+        <div className="flex items-center gap-2 text-gray-500">
+          <Settings className="w-4 h-4" /> Auto Save
+        </div>
         <button
-          onClick={onEdit}
-          className="p-2 bg-sky-50 text-sky-700 rounded-lg hover:bg-sky-100 transition"
+          onClick={onToggleAuto}
+          className={`px-3 py-1 rounded-lg text-sm font-medium ${
+            acc.autoSave
+              ? "bg-emerald-100 text-emerald-700"
+              : "bg-gray-100 text-gray-500"
+          }`}
+          type="button"
+          disabled={busy}
         >
-          <Pencil className="w-4 h-4" />
-        </button>
-        <button
-          onClick={onWithdraw}
-          className="p-2 bg-rose-50 text-rose-600 rounded-lg hover:bg-rose-100 transition"
-        >
-          <MinusCircle className="w-4 h-4" />
+          {acc.autoSave ? "ON" : "OFF"}
         </button>
       </div>
     </div>
-
-    {/* Stats */}
-    <div className="space-y-3 mb-3">
-      <p className="text-sm text-gray-500">Capital</p>
-      <h4 className="text-xl font-semibold text-blue-600">
-        RM {s.capital.toFixed(2)}
-      </h4>
-      <p className="text-sm text-gray-500">Dividends</p>
-      <h4 className="text-xl font-semibold text-emerald-600">
-        RM {s.dividend.toFixed(2)}
-      </h4>
-      <p className="text-sm text-gray-500">Goal Progress</p>
-      <div className="w-full bg-gray-200 rounded-full h-2">
-        <div
-          className="h-2 bg-gradient-to-r from-blue-400 to-sky-600 rounded-full"
-          style={{ width: `${Math.min((s.capital / s.goal) * 100, 100)}%` }}
-        ></div>
-      </div>
-      <p className="text-xs text-gray-500 text-right">
-        {((s.capital / s.goal) * 100).toFixed(1)}% of RM{s.goal}
-      </p>
-    </div>
-
-    {/* Automation */}
-    <div className="flex justify-between items-center mt-3 pt-3 border-t border-gray-200">
-      <div className="flex items-center gap-2 text-gray-500">
-        <Settings className="w-4 h-4" /> Auto Save
-      </div>
-      <button
-        onClick={toggleAutoSave}
-        className={`px-3 py-1 rounded-lg text-sm font-medium ${
-          s.autoSave
-            ? "bg-emerald-100 text-emerald-700"
-            : "bg-gray-100 text-gray-500"
-        }`}
-      >
-        {s.autoSave ? "ON" : "OFF"}
-      </button>
-    </div>
-
-    {/* Transaction History */}
-    <div className="mt-4 border-t pt-3">
-      <p className="text-sm font-medium text-gray-600 mb-2">Recent Activity</p>
-      <div className="space-y-2 max-h-32 overflow-y-auto">
-        {s.history.length > 0 ? (
-          s.history.map((h, i) => (
-            <div key={i} className="flex justify-between text-sm">
-              <span
-                className={`flex items-center gap-1 ${
-                  h.type === "withdraw"
-                    ? "text-rose-500"
-                    : h.type === "dividend"
-                    ? "text-emerald-600"
-                    : "text-blue-600"
-                }`}
-              >
-                {h.type === "withdraw" && (
-                  <ArrowDownCircle className="w-3 h-3" />
-                )}
-                {h.type === "deposit" && <ArrowUpCircle className="w-3 h-3" />}
-                {h.type === "dividend" && <Trophy className="w-3 h-3" />}
-                {h.type === "auto" && <RefreshCw className="w-3 h-3" />}
-                {h.type.charAt(0).toUpperCase() + h.type.slice(1)}
-              </span>
-              <span>RM {h.amount}</span>
-            </div>
-          ))
-        ) : (
-          <p className="text-xs text-gray-400">No recent activity</p>
-        )}
-      </div>
-    </div>
-  </div>
-);
+  );
+};
 
 const Modal = ({ title, children, onClose }) => (
-  <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50">
-    <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6 animate-fadeIn">
+  <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 px-4">
+    <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
       <div className="flex justify-between items-center mb-3">
         <h3 className="text-lg font-semibold text-gray-800">{title}</h3>
-        <button onClick={onClose} className="text-gray-500 hover:text-gray-700">
-          ✕
+        <button
+          onClick={onClose}
+          className="text-gray-500 hover:text-gray-700"
+          type="button"
+        >
+          <X className="w-5 h-5" />
         </button>
       </div>
       {children}
     </div>
   </div>
+);
+
+const Field = ({ label, children }) => (
+  <label className="block text-sm text-gray-700">
+    {label}
+    {children}
+  </label>
 );
