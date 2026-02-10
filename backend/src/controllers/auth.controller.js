@@ -70,7 +70,7 @@ export async function login(req, res) {
 
 export async function me(req, res) {
   const user = await User.findById(req.user.id).select(
-    "_id name email createdAt"
+    "_id name email createdAt",
   );
   if (!user) return res.status(404).json({ message: "User not found" });
   res.json({ user });

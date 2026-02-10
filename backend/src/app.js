@@ -10,6 +10,7 @@ import transactionRoutes from "./routes/transaction.routes.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import budgetRoutes from "./routes/budget.routes.js";
 import savingsRoutes from "./routes/savingsRoutes.js";
+import investmentRoutes from "./routes/investmentRoutes.js";
 
 import { notFound, errorHandler } from "./middleware/error.js";
 
@@ -44,7 +45,7 @@ export function createApp() {
   app.use(rateLimit({ windowMs: 60 * 1000, limit: 200 }));
 
   app.get("/health", (_req, res) =>
-    res.json({ ok: true, service: "FinTrack-Analysis API" })
+    res.json({ ok: true, service: "FinTrack-Analysis API" }),
   );
 
   app.use("/api/auth", authRoutes);
@@ -53,6 +54,7 @@ export function createApp() {
   app.use("/api/dashboard", dashboardRoutes);
   app.use("/api/budgets", budgetRoutes);
   app.use("/api/savings", savingsRoutes);
+  app.use("/api/investments", investmentRoutes);
 
   app.use(notFound);
   app.use(errorHandler);
