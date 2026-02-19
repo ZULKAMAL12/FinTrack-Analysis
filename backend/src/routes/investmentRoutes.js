@@ -27,6 +27,13 @@ import {
   exportAssets,
 } from "../controllers/investmentExportController.js";
 
+import {
+  searchStocks,
+  getTrendingStocks,
+  getStocksByCategory,
+  getFinancialNews,
+} from "../controllers/marketDataController.js";
+
 // Middleware
 import { requireAuth } from "../middleware/auth.js"; // Assuming you have this
 import {
@@ -129,6 +136,20 @@ router.post(
   validateGetPrices,
   refreshPrices,
 );
+
+/* ----------------------------- Market Data Routes ------------------------ */
+
+// Search stocks
+router.get("/search", requireAuth, searchStocks);
+
+// Get trending stocks
+router.get("/market/trending", requireAuth, getTrendingStocks);
+
+// Get stocks by category
+router.get("/market/category", requireAuth, getStocksByCategory);
+
+// Get financial news
+router.get("/market/news", requireAuth, getFinancialNews);
 
 /* ----------------------------- Export Routes ----------------------------- */
 

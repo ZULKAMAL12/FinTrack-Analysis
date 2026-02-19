@@ -14,20 +14,14 @@ import {
   Bitcoin,
   LineChart as LineIcon,
   PieChart as PieIcon,
-  Globe,
-  Star,
-  Pencil,
   Trash2,
   X,
   Loader2,
   CloudOff,
   CheckCircle2,
   AlertCircle,
-  Wallet,
   ShoppingCart,
-  TrendingDown as SellIcon,
-  Gift,
-  Settings,
+  Search,
 } from "lucide-react";
 
 import {
@@ -43,6 +37,10 @@ import {
   Legend,
   Tooltip,
 } from "recharts";
+
+// Import new components
+import StockSearch from "../components/StockSearch";
+import MarketOverview from "../components/MarketOverview";
 
 /* -------------------------------------------------------------------------- */
 /*                                    API                                     */
@@ -180,7 +178,7 @@ function buildYearsList(startYear = 2020, yearsAhead = 1) {
 
 function isValidDecimal(value) {
   if (!value) return true;
-  return /^\d*\.?\d{0,8}$/.test(value); // Allow up to 8 decimals for crypto
+  return /^\d*\.?\d{0,8}$/.test(value);
 }
 
 function downloadBlob(blob, filename) {
@@ -223,13 +221,13 @@ export default function InvestmentPage() {
     year: nowYM.year,
     month: nowYM.month,
     assetId: "all",
-    viewMode: "month", // "month" | "year"
-    assetType: "all", // "all" | "stock" | "crypto" | "gold"
+    viewMode: "month",
+    assetType: "all",
   });
 
   const [assets, setAssets] = useState([]);
   const [transactions, setTransactions] = useState([]);
-  const [prices, setPrices] = useState({}); // { symbol: { price, currency, change24h, lastUpdated } }
+  const [prices, setPrices] = useState({});
 
   const [toast, setToast] = useState({ show: false, msg: "", tone: "info" });
 
@@ -257,7 +255,9 @@ export default function InvestmentPage() {
   }, []);
 
   /* ------------------------------ Modals ------------------------------ */
-  const [activeTab, setActiveTab] = useState("portfolio"); // "portfolio" | "market"
+  const [activeTab, setActiveTab] = useState("portfolio");
+
+  const [showStockSearch, setShowStockSearch] = useState(false);
 
   const [addAssetModal, setAddAssetModal] = useState({
     open: false,
@@ -358,9 +358,9 @@ export default function InvestmentPage() {
         signal,
       });
       setPrices(res.prices || {});
-    } catch (e) {
-      if (e.name !== "AbortError") {
-        console.error("Failed to load prices:", e);
+    } catch (error) {
+      if (error.name !== "AbortError") {
+        console.error("Failed to load prices:", error);
       }
     }
   }
@@ -518,7 +518,6 @@ export default function InvestmentPage() {
   }, [filteredAssets, prices]);
 
   const projection6m = useMemo(() => {
-    // Simple projection based on current portfolio
     const months = [];
     const now = new Date();
     let baseValue = portfolioMetrics.totalCurrentValueMYR;
@@ -527,7 +526,6 @@ export default function InvestmentPage() {
       const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
       const label = d.toLocaleString("en", { month: "short" });
 
-      // Simple 1% monthly growth estimate
       baseValue = baseValue * 1.01;
 
       months.push({
@@ -543,16 +541,26 @@ export default function InvestmentPage() {
   /*                                CRUD Actions                                */
   /* -------------------------------------------------------------------------- */
 
-  function openAddAsset() {
+  function handleStockSelect(stock) {
+    setShowStockSearch(false);
     setAddAssetModal({
       open: true,
-      name: "",
-      symbol: "",
-      type: "stock",
-      exchange: "US",
-      currency: "USD",
+      name: stock.name,
+      symbol: stock.symbol,
+      type: stock.type,
+      exchange:
+        stock.exchange === "NMS" || stock.exchange === "NYQ"
+          ? "US"
+          : stock.exchange === "KLS"
+            ? "KLSE"
+            : "US",
+      currency: stock.currency || "USD",
       error: "",
     });
+  }
+
+  function openAddAsset() {
+    setShowStockSearch(true);
   }
 
   async function createAsset(e) {
@@ -896,6 +904,7 @@ export default function InvestmentPage() {
   useEffect(() => {
     const handleEscape = (e) => {
       if (e.key === "Escape") {
+        if (showStockSearch) setShowStockSearch(false);
         if (addAssetModal.open)
           setAddAssetModal((m) => ({ ...m, open: false }));
         if (buyModal.open) setBuyModal((m) => ({ ...m, open: false }));
@@ -909,6 +918,7 @@ export default function InvestmentPage() {
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
   }, [
+    showStockSearch,
     addAssetModal.open,
     buyModal.open,
     sellModal.open,
@@ -916,7 +926,6 @@ export default function InvestmentPage() {
     exportModal.open,
   ]);
 
-  // Auto-calculate total cost in buy modal
   useEffect(() => {
     if (buyModal.open) {
       const units = safeNumber(buyModal.units, 0);
@@ -928,7 +937,6 @@ export default function InvestmentPage() {
     }
   }, [buyModal.units, buyModal.pricePerUnit, buyModal.open]);
 
-  // Auto-calculate total proceeds in sell modal
   useEffect(() => {
     if (sellModal.open) {
       const units = safeNumber(sellModal.units, 0);
@@ -950,8 +958,8 @@ export default function InvestmentPage() {
               Investment Portfolio
             </h1>
             <p className="text-slate-600 text-sm sm:text-base mt-1">
-              Track stocks, crypto, and gold with real-time prices and net-worth
-              integration.
+              Track stocks, crypto, and gold with real-time prices and smart
+              search.
             </p>
           </div>
 
@@ -998,7 +1006,7 @@ export default function InvestmentPage() {
               type="button"
               aria-label="Add new asset"
             >
-              <Plus className="w-4 h-4" /> Add Asset
+              <Search className="w-4 h-4" /> Search & Add
             </button>
           </div>
         </div>
@@ -1122,6 +1130,7 @@ export default function InvestmentPage() {
                 : "text-slate-700 hover:text-blue-600"
             }`}
             onClick={() => setActiveTab("portfolio")}
+            type="button"
           >
             My Portfolio
           </button>
@@ -1132,6 +1141,7 @@ export default function InvestmentPage() {
                 : "text-slate-700 hover:text-emerald-600"
             }`}
             onClick={() => setActiveTab("market")}
+            type="button"
           >
             Market Overview
           </button>
@@ -1148,7 +1158,6 @@ export default function InvestmentPage() {
         </div>
       )}
 
-      {/* Toast */}
       {toast.show && (
         <div
           className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60]"
@@ -1251,8 +1260,23 @@ export default function InvestmentPage() {
               ))}
 
               {filteredAssets.length === 0 && (
-                <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-6 text-slate-700">
-                  No assets in portfolio. Click <b>Add Asset</b> to get started.
+                <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-8 text-center">
+                  <Search className="w-12 h-12 mx-auto text-slate-300 mb-3" />
+                  <p className="text-slate-700 font-medium">
+                    No assets in portfolio
+                  </p>
+                  <p className="text-sm text-slate-500 mt-1">
+                    Click <b>"Search & Add"</b> to find and add stocks, ETFs, or
+                    crypto
+                  </p>
+                  <button
+                    onClick={openAddAsset}
+                    className="mt-4 px-5 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 transition"
+                    type="button"
+                  >
+                    <Search className="w-4 h-4 inline mr-2" />
+                    Search Assets
+                  </button>
                 </div>
               )}
             </section>
@@ -1341,22 +1365,22 @@ export default function InvestmentPage() {
         </>
       ) : (
         <>
-          {/* Market Overview */}
-          <div className="bg-white/90 backdrop-blur-lg rounded-2xl border border-gray-100 p-6 shadow-lg">
-            <h2 className="text-2xl font-semibold mb-4 flex items-center gap-2 text-[#0b1222]">
-              <Globe className="w-5 h-5 text-emerald-600" /> Market Overview
-            </h2>
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-slate-700 text-sm">
-              Market data will be available when you add assets to your
-              portfolio. Click "Add Asset" to get started!
-            </div>
-          </div>
+          {/* Market Overview Tab with Real Data */}
+          <MarketOverview />
         </>
       )}
 
       {/* Modals */}
 
-      {/* Add Asset Modal */}
+      {/* Stock Search Modal */}
+      {showStockSearch && (
+        <StockSearch
+          onSelect={handleStockSelect}
+          onClose={() => setShowStockSearch(false)}
+        />
+      )}
+
+      {/* Add Asset Modal (Pre-filled from search) */}
       {addAssetModal.open && (
         <Modal
           title="Add Asset to Portfolio"
@@ -1372,65 +1396,21 @@ export default function InvestmentPage() {
           )}
 
           <form onSubmit={createAsset} className="space-y-3">
-            <Field label="Asset Type">
-              <select
-                value={addAssetModal.type}
+            <Field label="Symbol (Ticker)">
+              <input
+                value={addAssetModal.symbol}
                 onChange={(e) =>
-                  setAddAssetModal((m) => ({ ...m, type: e.target.value }))
+                  setAddAssetModal((m) => ({
+                    ...m,
+                    symbol: e.target.value.toUpperCase(),
+                    error: "",
+                  }))
                 }
                 className={`mt-1 ${SELECT_UI}`}
-                required
-              >
-                {ASSET_TYPES.map((t) => (
-                  <option key={t.value} value={t.value}>
-                    {t.label}
-                  </option>
-                ))}
-              </select>
+                readOnly
+                disabled
+              />
             </Field>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Symbol (Ticker)">
-                <input
-                  value={addAssetModal.symbol}
-                  onChange={(e) =>
-                    setAddAssetModal((m) => ({
-                      ...m,
-                      symbol: e.target.value.toUpperCase(),
-                      error: "",
-                    }))
-                  }
-                  className={`mt-1 ${SELECT_UI}`}
-                  placeholder="AAPL, BTC, MAYBANK.KL"
-                  maxLength={20}
-                  required
-                  aria-required="true"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Use .KL suffix for Malaysian stocks
-                </p>
-              </Field>
-
-              <Field label="Exchange">
-                <select
-                  value={addAssetModal.exchange}
-                  onChange={(e) =>
-                    setAddAssetModal((m) => ({
-                      ...m,
-                      exchange: e.target.value,
-                    }))
-                  }
-                  className={`mt-1 ${SELECT_UI}`}
-                  required
-                >
-                  {EXCHANGES.map((ex) => (
-                    <option key={ex.value} value={ex.value}>
-                      {ex.label}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
 
             <Field label="Asset Name">
               <input
@@ -1443,12 +1423,50 @@ export default function InvestmentPage() {
                   }))
                 }
                 className={`mt-1 ${SELECT_UI}`}
-                placeholder="Apple Inc., Bitcoin, Maybank"
                 maxLength={100}
                 required
                 aria-required="true"
               />
             </Field>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Type">
+                <select
+                  value={addAssetModal.type}
+                  onChange={(e) =>
+                    setAddAssetModal((m) => ({ ...m, type: e.target.value }))
+                  }
+                  className={`mt-1 ${SELECT_UI}`}
+                  disabled
+                >
+                  {ASSET_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Exchange">
+                <select
+                  value={addAssetModal.exchange}
+                  onChange={(e) =>
+                    setAddAssetModal((m) => ({
+                      ...m,
+                      exchange: e.target.value,
+                    }))
+                  }
+                  className={`mt-1 ${SELECT_UI}`}
+                  disabled
+                >
+                  {EXCHANGES.map((ex) => (
+                    <option key={ex.value} value={ex.value}>
+                      {ex.label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            </div>
 
             <Field label="Currency">
               <select
@@ -1479,7 +1497,7 @@ export default function InvestmentPage() {
               ) : (
                 <Plus className="w-4 h-4" />
               )}
-              Add Asset
+              Add to Portfolio
             </button>
           </form>
         </Modal>
@@ -1818,7 +1836,7 @@ export default function InvestmentPage() {
               {status.busy ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
-                <SellIcon className="w-4 h-4" />
+                <TrendingDown className="w-4 h-4" />
               )}
               Record Sell
             </button>
@@ -2205,7 +2223,7 @@ const AssetCard = ({ asset, priceData, busy, onBuy, onSell, onDelete }) => {
           className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 text-white text-sm font-semibold hover:opacity-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
           aria-label="Sell"
         >
-          <SellIcon className="w-4 h-4" /> Sell
+          <TrendingDown className="w-4 h-4" /> Sell
         </button>
       </div>
 
@@ -2233,6 +2251,7 @@ const Modal = ({ title, onClose, children }) => (
       role="button"
       tabIndex={0}
       aria-label="Close modal"
+      onKeyDown={(e) => e.key === "Enter" && onClose()}
     />
     <div className="relative w-full sm:max-w-xl bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-slate-100 max-h-[88vh] overflow-y-auto">
       <div className="sticky top-0 bg-white/95 backdrop-blur border-b border-slate-100 px-5 py-4 flex items-start justify-between gap-3">
