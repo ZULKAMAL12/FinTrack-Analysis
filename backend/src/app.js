@@ -11,6 +11,8 @@ import dashboardRoutes from "./routes/dashboard.routes.js";
 import budgetRoutes from "./routes/budget.routes.js";
 import savingsRoutes from "./routes/savingsRoutes.js";
 import investmentRoutes from "./routes/investmentRoutes.js";
+import expenseRoutes from "./routes/expenseRoutes.js";
+import debtRoutes from "./routes/debtRoutes.js";
 
 import { notFound, errorHandler } from "./middleware/error.js";
 
@@ -55,6 +57,8 @@ export function createApp() {
   app.use("/api/budgets", budgetRoutes);
   app.use("/api/savings", savingsRoutes);
   app.use("/api/investments", investmentRoutes);
+  app.use("/api/expenses", expenseRoutes);
+  app.use("/api/debts", debtRoutes);
 
   app.use(notFound);
   app.use(errorHandler);

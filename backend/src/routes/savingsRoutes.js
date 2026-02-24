@@ -20,6 +20,7 @@ import {
   createTransaction,
   patchTransaction,
   deleteTransaction,
+  bulkConfirmTransactions,
 } from "../controllers/savingsTransactionsController.js";
 
 import {
@@ -36,9 +37,16 @@ import {
   exportYearlySummary,
 } from "../controllers/savingsExportController.js";
 
+import {
+  getSmartAlerts,
+  getDepositStats,
+} from "../controllers/savingsStatsController.js";
+
 const router = express.Router();
 
-// Rate limiters
+// ============================================================================
+// Rate Limiters
+// ============================================================================
 const createLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
   max: 20, // 20 creates per minute
@@ -59,7 +67,17 @@ const exportLimiter = rateLimit({
   message: { message: "Too many export requests, please try again later." },
 });
 
-/* ------------------------------- Accounts ------------------------------- */
+const statsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30, // 30 stats/alerts requests per minute
+  message: { message: "Too many stats requests, please try again later." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// ============================================================================
+// Accounts
+// ============================================================================
 router.get("/accounts", requireAuth, listAccounts);
 router.post(
   "/accounts",
@@ -71,8 +89,18 @@ router.post(
 router.put("/accounts/:id", requireAuth, validateUpdateAccount, updateAccount);
 router.delete("/accounts/:id", requireAuth, deleteAccount);
 
-/* ----------------------------- Transactions ----------------------------- */
+// ============================================================================
+// Transactions
+// ============================================================================
 router.get("/transactions", requireAuth, listTransactions);
+
+// ⚠️ IMPORTANT: Bulk confirm MUST be before /:id routes
+router.patch(
+  "/transactions/bulk-confirm",
+  requireAuth,
+  bulkConfirmTransactions,
+);
+
 router.post(
   "/transactions",
   requireAuth,
@@ -82,7 +110,10 @@ router.post(
 );
 router.patch("/transactions/:id", requireAuth, patchTransaction);
 router.delete("/transactions/:id", requireAuth, deleteTransaction);
-/* --------------------------- Recurring Rules ---------------------------- */
+
+// ============================================================================
+// Recurring Rules
+// ============================================================================
 router.get("/recurring-rules", requireAuth, listRules);
 router.post(
   "/recurring-rules",
@@ -100,7 +131,15 @@ router.post(
   generateMissing,
 );
 
-/* -------------------------------- Export -------------------------------- */
+// ============================================================================
+// Stats & Alerts (Smart-Assist System) ⭐ NEW
+// ============================================================================
+router.get("/alerts", requireAuth, statsLimiter, getSmartAlerts);
+router.get("/stats/deposits", requireAuth, statsLimiter, getDepositStats);
+
+// ============================================================================
+// Export
+// ============================================================================
 router.get(
   "/export/transactions",
   requireAuth,

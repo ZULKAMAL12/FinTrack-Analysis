@@ -1,10 +1,8 @@
-// src/pages/Savings.jsx
 import { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import {
   Plus,
   PiggyBank,
   RefreshCw,
-  Settings,
   Pencil,
   MinusCircle,
   X,
@@ -22,6 +20,13 @@ import {
   CheckCircle2,
   AlertCircle,
   ChevronDown,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  AlertTriangle,
+  Flame,
+  Target,
+  Zap,
 } from "lucide-react";
 
 import {
@@ -45,9 +50,12 @@ const API = {
   ACCOUNTS: "/api/savings/accounts",
   TX: "/api/savings/transactions",
   TX_BY_ID: (id) => `/api/savings/transactions/${id}`,
+  TX_BULK_CONFIRM: "/api/savings/transactions/bulk-confirm",
   RULES: "/api/savings/recurring-rules",
   RULE_BY_ID: (id) => `/api/savings/recurring-rules/${id}`,
   RULE_GENERATE_MISSING: "/api/savings/recurring-rules/generate-missing",
+  ALERTS: "/api/savings/alerts",
+  STATS_DEPOSITS: "/api/savings/stats/deposits",
   EXPORT_TX: "/api/savings/export/transactions",
   EXPORT_ACCOUNTS: "/api/savings/export/accounts",
   EXPORT_YEARLY: "/api/savings/export/yearly-summary",
@@ -66,17 +74,15 @@ async function apiFetch(path, options = {}) {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(options.headers || {}),
     },
-    signal: options.signal, // ✅ Support AbortSignal
+    signal: options.signal,
   });
 
-  // ✅ Handle 401 Unauthorized
   if (res.status === 401) {
     localStorage.removeItem("token");
     window.location.href = "/login";
     throw new Error("Session expired. Please login again.");
   }
 
-  // For CSV download (blob)
   if (options.expectBlob) {
     if (!res.ok) {
       const text = await res.text().catch(() => "");
@@ -172,14 +178,12 @@ function buildYearsList(startYear = 2020, yearsAhead = 1) {
   return out;
 }
 
-// ✅ Validate day for month/year
 function isValidDay(year, month, day) {
   if (!day) return true;
   const maxDay = new Date(year, month, 0).getDate();
   return day >= 1 && day <= maxDay;
 }
 
-// ✅ Validate decimal input (max 2 decimal places)
 function isValidDecimal(value) {
   if (!value) return true;
   return /^\d*\.?\d{0,2}$/.test(value);
@@ -322,10 +326,11 @@ export default function SavingsPage() {
   const [rulesByAccount, setRulesByAccount] = useState({});
   const [tx, setTx] = useState([]);
   const [pendingTx, setPendingTx] = useState([]);
+  const [alerts, setAlerts] = useState([]);
+  const [depositStats, setDepositStats] = useState(null);
 
   const [toast, setToast] = useState({ show: false, msg: "", tone: "info" });
 
-  // ✅ Fixed toast with cleanup
   const showToast = useCallback((msg, tone = "info") => {
     setToast({ show: true, msg, tone });
 
@@ -338,7 +343,6 @@ export default function SavingsPage() {
     }, 2600);
   }, []);
 
-  // ✅ Cleanup on unmount
   useEffect(() => {
     return () => {
       if (toastTimeoutRef.current) {
@@ -479,6 +483,28 @@ export default function SavingsPage() {
     setPendingTx(list.filter((t) => (t.status || "completed") === "pending"));
   }
 
+  async function loadAlerts(signal) {
+    try {
+      const data = await apiFetch(API.ALERTS, { signal });
+      setAlerts(data.alerts || []);
+    } catch (e) {
+      if (e.name !== "AbortError") {
+        console.error("Failed to load alerts:", e);
+      }
+    }
+  }
+
+  async function loadDepositStats(signal) {
+    try {
+      const data = await apiFetch(API.STATS_DEPOSITS, { signal });
+      setDepositStats(data);
+    } catch (e) {
+      if (e.name !== "AbortError") {
+        console.error("Failed to load deposit stats:", e);
+      }
+    }
+  }
+
   async function generateMissingRecurringIfAny(signal) {
     try {
       await apiFetch(API.RULE_GENERATE_MISSING, { method: "POST", signal });
@@ -489,9 +515,7 @@ export default function SavingsPage() {
     }
   }
 
-  // ✅ Fixed with AbortController
   async function loadAll() {
-    // Cancel previous request if still running
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
@@ -508,13 +532,16 @@ export default function SavingsPage() {
 
     try {
       await generateMissingRecurringIfAny(abortController.signal);
-      await loadAccountsAndRules(abortController.signal);
-      await loadTransactionsForFilter(filter, abortController.signal);
+      await Promise.all([
+        loadAccountsAndRules(abortController.signal),
+        loadTransactionsForFilter(filter, abortController.signal),
+        loadAlerts(abortController.signal),
+        loadDepositStats(abortController.signal),
+      ]);
       didHydrateRef.current = true;
       setStatus((s) => ({ ...s, loading: false }));
     } catch (e) {
       if (e.name === "AbortError") {
-        // Request was cancelled, ignore
         return;
       }
       setStatus((s) => ({
@@ -531,7 +558,6 @@ export default function SavingsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ✅ Fixed with AbortController
   useEffect(() => {
     if (!didHydrateRef.current) return;
 
@@ -540,7 +566,11 @@ export default function SavingsPage() {
     (async () => {
       try {
         setStatus((s) => ({ ...s, loading: true, error: "" }));
-        await loadTransactionsForFilter(filter, abortController.signal);
+        await Promise.all([
+          loadTransactionsForFilter(filter, abortController.signal),
+          loadAlerts(abortController.signal),
+          loadDepositStats(abortController.signal),
+        ]);
         setStatus((s) => ({ ...s, loading: false }));
       } catch (e) {
         if (e.name !== "AbortError") {
@@ -991,6 +1021,28 @@ export default function SavingsPage() {
     }
   }
 
+  // ⭐ NEW: Bulk confirm
+  async function bulkConfirmPending(transactionIds) {
+    setStatus((s) => ({
+      ...s,
+      busy: true,
+      error: "",
+      offlineSaveError: false,
+    }));
+    try {
+      await apiFetch(API.TX_BULK_CONFIRM, {
+        method: "PATCH",
+        body: JSON.stringify({ transactionIds }),
+      });
+      showToast("All confirmed!", "ok");
+      await loadAll();
+      setStatus((s) => ({ ...s, busy: false }));
+    } catch (e) {
+      setStatus((s) => ({ ...s, busy: false, offlineSaveError: true }));
+      showToast(e?.message || "Failed to bulk confirm", "warn");
+    }
+  }
+
   function openRuleEditor(acc) {
     const existing = rulesByAccount[acc._id];
     if (existing) {
@@ -1176,7 +1228,6 @@ export default function SavingsPage() {
 
   const years = useMemo(() => buildYearsList(2020, 1), []);
 
-  // ✅ Keyboard support for modals
   useEffect(() => {
     const handleEscape = (e) => {
       if (e.key === "Escape") {
@@ -1210,8 +1261,7 @@ export default function SavingsPage() {
               Savings Tracker
             </h1>
             <p className="text-slate-600 text-sm sm:text-base mt-1">
-              Net-worth ready savings tracking with month/year history,
-              withdrawals, recurring reminders, and CSV export.
+              Net-worth ready savings tracking with smart-assist, recurring reminders, and insights.
             </p>
           </div>
 
@@ -1384,6 +1434,20 @@ export default function SavingsPage() {
         </div>
       )}
 
+      {/* ⭐ NEW: Smart Alerts Widget */}
+      {alerts.length > 0 && (
+        <section className="mb-8">
+          <SmartAlertsWidget alerts={alerts} />
+        </section>
+      )}
+
+      {/* ⭐ NEW: This Month vs Last Month */}
+      {depositStats && (
+        <section className="mb-8">
+          <MonthComparisonWidget stats={depositStats} />
+        </section>
+      )}
+
       {/* Summary Cards */}
       <section className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-8">
         <SummaryCard
@@ -1540,100 +1604,18 @@ export default function SavingsPage() {
         </div>
       </section>
 
-      {/* Pending Recurring Deposits */}
+      {/* ⭐ NEW: Pending Deposits with Bulk Confirm */}
       <section className="mb-10">
-        <div className="bg-white/85 backdrop-blur-lg rounded-2xl border border-slate-100 shadow-sm p-5">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h3 className="text-base font-semibold text-[#0b1222] flex items-center gap-2">
-                <Repeat className="w-5 h-5 text-indigo-600" /> Pending Recurring
-                Deposits
-              </h3>
-              <p className="text-xs text-slate-500 mt-1">
-                Recurring reminders create <b>pending</b> records. Confirm only
-                if you really deposited.
-              </p>
-            </div>
-            <div className="text-xs text-slate-500">
-              Scope:{" "}
-              {filter.viewMode === "month"
-                ? yyyymmToLabel(filter.year, filter.month || nowYM.month)
-                : `Year ${filter.year}`}
-            </div>
-          </div>
-
-          {status.loading ? (
-            <div className="mt-4 flex items-center gap-2 text-slate-600 text-sm">
-              <Loader2 className="w-4 h-4 animate-spin" />
-              Loading...
-            </div>
-          ) : pendingTx.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-slate-700 text-sm">
-              No pending recurring deposits in this view.
-            </div>
-          ) : (
-            <div className="mt-4 space-y-2">
-              {pendingTx.slice(0, 12).map((t) => (
-                <div
-                  key={t._id}
-                  className="rounded-xl border border-slate-200 bg-white p-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-900 truncate">
-                      {t.accountName ||
-                        accounts.find((a) => a._id === t.accountId)?.name ||
-                        "Account"}{" "}
-                      •{" "}
-                      <span className="text-slate-600 font-medium">
-                        {txTypeLabel(t.type)}
-                      </span>
-                    </p>
-                    <p className="text-xs text-slate-500 mt-1">
-                      {yyyymmToLabel(t.year, t.month)} • Amount:{" "}
-                      <b>{formatRM(t.amount)}</b>{" "}
-                      {t.source === "recurring" ? "• Recurring" : ""}{" "}
-                      {t.notes ? `• ${t.notes}` : ""}
-                    </p>
-                  </div>
-
-                  <div className="flex items-center gap-2 shrink-0">
-                    <span
-                      className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${statusBadge(t.status).cls}`}
-                    >
-                      {statusBadge(t.status).text}
-                    </span>
-                    <span
-                      className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${sourceBadge(t.source).cls}`}
-                    >
-                      {sourceBadge(t.source).text}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={status.busy}
-                      onClick={() => confirmPendingTx(t)}
-                      className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                      title="Confirm (mark completed)"
-                      aria-label="Confirm transaction"
-                    >
-                      {status.busy ? (
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="w-4 h-4" />
-                      )}
-                      Confirm
-                    </button>
-                  </div>
-                </div>
-              ))}
-
-              {pendingTx.length > 12 && (
-                <p className="text-xs text-slate-500 mt-2">
-                  Showing first 12 pending items. Use filter to narrow down.
-                </p>
-              )}
-            </div>
-          )}
-        </div>
+        <PendingDepositsWidget
+          pendingTx={pendingTx}
+          accounts={accounts}
+          filter={filter}
+          nowYM={nowYM}
+          loading={status.loading}
+          busy={status.busy}
+          onConfirmSingle={confirmPendingTx}
+          onBulkConfirm={bulkConfirmPending}
+        />
       </section>
 
       {/* Accounts */}
@@ -3003,19 +2985,342 @@ export default function SavingsPage() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                               Reusable UI Bits                              */
+/*                          ⭐ NEW WIDGET COMPONENTS                          */
 /* -------------------------------------------------------------------------- */
-const INPUT_UI =
-  "w-full border border-slate-300 rounded-lg px-3 py-2 bg-white text-slate-900 placeholder-slate-400 " +
-  "focus:outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-500";
 
-const SELECT_UI =
-  "w-full border border-slate-300 rounded-lg px-3 py-2 bg-white text-slate-900 " +
-  "focus:outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-500";
+const SmartAlertsWidget = ({ alerts }) => {
+  if (alerts.length === 0) return null;
 
-const FILTER_SELECT =
-  "px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-900 text-sm " +
-  "focus:outline-none focus:ring-2 focus:ring-sky-200 focus:border-sky-500";
+  return (
+    <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-amber-200 rounded-2xl p-5 sm:p-6 shadow-md">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="p-2 bg-amber-100 rounded-lg">
+          <AlertTriangle className="w-5 h-5 text-amber-700" />
+        </div>
+        <div>
+          <h3 className="text-lg font-bold text-slate-900">🚨 Smart Alerts</h3>
+          <p className="text-sm text-slate-600">Insights & reminders</p>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        {alerts.map((alert, idx) => (
+          <div
+            key={idx}
+            className={`rounded-xl border-2 p-4 ${
+              alert.severity === "high"
+                ? "bg-rose-50 border-rose-300"
+                : alert.severity === "medium"
+                  ? "bg-amber-50 border-amber-300"
+                  : "bg-emerald-50 border-emerald-300"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className="shrink-0">
+                {alert.severity === "high" ? (
+                  <AlertTriangle className="w-5 h-5 text-rose-600" />
+                ) : alert.severity === "medium" ? (
+                  <AlertCircle className="w-5 h-5 text-amber-600" />
+                ) : (
+                  <Flame className="w-5 h-5 text-emerald-600" />
+                )}
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-semibold text-slate-900">
+                  {alert.title}
+                </p>
+                <p className="text-xs text-slate-600 mt-1">{alert.message}</p>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const MonthComparisonWidget = ({ stats }) => {
+  if (!stats) return null;
+
+  const { currentMonth, lastMonth, changes, streak, consistency } = stats;
+
+  return (
+    <div className="bg-gradient-to-br from-sky-50 to-blue-50 border-2 border-sky-200 rounded-2xl p-5 sm:p-6 shadow-md">
+      <div className="flex items-center gap-3 mb-4">
+        <div className="p-2 bg-sky-100 rounded-lg">
+          <TrendingUp className="w-5 h-5 text-sky-700" />
+        </div>
+        <div>
+          <h3 className="text-lg font-bold text-slate-900">
+            📊 This Month vs Last Month
+          </h3>
+          <p className="text-sm text-slate-600">Performance comparison</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        {/* Capital Deposits */}
+        <div className="bg-white rounded-xl p-4 border border-sky-100">
+          <p className="text-xs text-slate-600 mb-2">Deposits</p>
+          <div className="flex items-baseline gap-2">
+            <p className="text-xl font-bold text-slate-900">
+              {formatRM(currentMonth.capital)}
+            </p>
+            {changes.capitalTrend !== "same" && (
+              <div
+                className={`flex items-center gap-1 text-xs font-semibold ${
+                  changes.capitalTrend === "up"
+                    ? "text-emerald-600"
+                    : "text-rose-600"
+                }`}
+              >
+                {changes.capitalTrend === "up" ? (
+                  <TrendingUp className="w-3 h-3" />
+                ) : (
+                  <TrendingDown className="w-3 h-3" />
+                )}
+                {Math.abs(changes.capitalChange).toFixed(1)}%
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            Last: {formatRM(lastMonth.capital)}
+          </p>
+        </div>
+
+        {/* Dividends */}
+        <div className="bg-white rounded-xl p-4 border border-sky-100">
+          <p className="text-xs text-slate-600 mb-2">Dividends</p>
+          <div className="flex items-baseline gap-2">
+            <p className="text-xl font-bold text-emerald-700">
+              {formatRM(currentMonth.dividends)}
+            </p>
+            {changes.dividendsTrend !== "same" && (
+              <div
+                className={`flex items-center gap-1 text-xs font-semibold ${
+                  changes.dividendsTrend === "up"
+                    ? "text-emerald-600"
+                    : "text-rose-600"
+                }`}
+              >
+                {changes.dividendsTrend === "up" ? (
+                  <TrendingUp className="w-3 h-3" />
+                ) : (
+                  <TrendingDown className="w-3 h-3" />
+                )}
+                {Math.abs(changes.dividendsChange).toFixed(1)}%
+              </div>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            Last: {formatRM(lastMonth.dividends)}
+          </p>
+        </div>
+
+        {/* Streak */}
+        <div className="bg-white rounded-xl p-4 border border-sky-100">
+          <p className="text-xs text-slate-600 mb-2">Deposit Streak</p>
+          <div className="flex items-baseline gap-2">
+            <p className="text-xl font-bold text-indigo-700">
+              {streak.current}
+            </p>
+            <p className="text-xs text-slate-500">months</p>
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            Record: {streak.longest} months
+          </p>
+        </div>
+
+        {/* Consistency */}
+        <div className="bg-white rounded-xl p-4 border border-sky-100">
+          <p className="text-xs text-slate-600 mb-2">6M Consistency</p>
+          <div className="flex items-baseline gap-2">
+            <p className="text-xl font-bold text-violet-700">
+              {consistency.score}%
+            </p>
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            {consistency.monthsWithDeposits} of 6 months
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const PendingDepositsWidget = ({
+  pendingTx,
+  accounts,
+  filter,
+  nowYM,
+  loading,
+  busy,
+  onConfirmSingle,
+  onBulkConfirm,
+}) => {
+  const [selectedIds, setSelectedIds] = useState([]);
+
+  const toggleSelect = (id) => {
+    setSelectedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    );
+  };
+
+  const selectAll = () => {
+    if (selectedIds.length === pendingTx.length) {
+      setSelectedIds([]);
+    } else {
+      setSelectedIds(pendingTx.map((t) => t._id));
+    }
+  };
+
+  const handleBulkConfirm = () => {
+    if (selectedIds.length === 0) return;
+    onBulkConfirm(selectedIds);
+    setSelectedIds([]);
+  };
+
+  return (
+    <div className="bg-white/85 backdrop-blur-lg rounded-2xl border border-slate-100 shadow-sm p-5">
+      <div className="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h3 className="text-base font-semibold text-[#0b1222] flex items-center gap-2">
+            <Repeat className="w-5 h-5 text-indigo-600" /> Pending Recurring
+            Deposits
+          </h3>
+          <p className="text-xs text-slate-500 mt-1">
+            Recurring reminders create <b>pending</b> records. Confirm only if
+            you really deposited.
+          </p>
+        </div>
+        <div className="text-xs text-slate-500">
+          Scope:{" "}
+          {filter.viewMode === "month"
+            ? yyyymmToLabel(filter.year, filter.month || nowYM.month)
+            : `Year ${filter.year}`}
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-slate-600 text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Loading...
+        </div>
+      ) : pendingTx.length === 0 ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-slate-700 text-sm">
+          No pending recurring deposits in this view.
+        </div>
+      ) : (
+        <>
+          {/* Bulk Actions Bar */}
+          {selectedIds.length > 0 && (
+            <div className="mb-4 rounded-xl border-2 border-emerald-200 bg-emerald-50 p-3 flex items-center justify-between">
+              <p className="text-sm font-semibold text-emerald-800">
+                {selectedIds.length} selected
+              </p>
+              <button
+                onClick={handleBulkConfirm}
+                disabled={busy}
+                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-lg text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
+                type="button"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Confirm All Selected
+              </button>
+            </div>
+          )}
+
+          {/* Select All */}
+          <div className="mb-3">
+            <button
+              onClick={selectAll}
+              className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold"
+              type="button"
+            >
+              {selectedIds.length === pendingTx.length
+                ? "Deselect All"
+                : "Select All"}
+            </button>
+          </div>
+
+          {/* Pending List */}
+          <div className="space-y-2">
+            {pendingTx.slice(0, 12).map((t) => (
+              <div
+                key={t._id}
+                className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedIds.includes(t._id)}
+                  onChange={() => toggleSelect(t._id)}
+                  className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-slate-900 truncate">
+                    {t.accountName ||
+                      accounts.find((a) => a._id === t.accountId)?.name ||
+                      "Account"}{" "}
+                    •{" "}
+                    <span className="text-slate-600 font-medium">
+                      {txTypeLabel(t.type)}
+                    </span>
+                  </p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    {yyyymmToLabel(t.year, t.month)} • Amount:{" "}
+                    <b>{formatRM(t.amount)}</b>{" "}
+                    {t.source === "recurring" ? "• Recurring" : ""}{" "}
+                    {t.notes ? `• ${t.notes}` : ""}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  <span
+                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${statusBadge(t.status).cls}`}
+                  >
+                    {statusBadge(t.status).text}
+                  </span>
+                  <span
+                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${sourceBadge(t.source).cls}`}
+                  >
+                    {sourceBadge(t.source).text}
+                  </span>
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => onConfirmSingle(t)}
+                    className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Confirm (mark completed)"
+                    aria-label="Confirm transaction"
+                  >
+                    {busy ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <CheckCircle2 className="w-4 h-4" />
+                    )}
+                    Confirm
+                  </button>
+                </div>
+              </div>
+            ))}
+
+            {pendingTx.length > 12 && (
+              <p className="text-xs text-slate-500 mt-2">
+                Showing first 12 pending items. Use filter to narrow down.
+              </p>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------------------- */
+/*                          EXISTING WIDGET COMPONENTS                        */
+/* -------------------------------------------------------------------------- */
 
 const SummaryCard = ({ label, color, value, sub }) => (
   <div className="bg-white/80 backdrop-blur-lg rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm hover:shadow-md transition">
@@ -3104,8 +3409,9 @@ const SavingsCard = ({
     : "Auto plan: OFF";
 
   return (
-    <div className="bg-white/95 backdrop-blur-lg rounded-2xl border border-gray-100 shadow-md p-5 sm:p-6 hover:shadow-lg transition">
-      <div className="flex justify-between items-start mb-4 gap-3">
+    <div className="bg-white/95 backdrop-blur-md rounded-2xl border border-gray-100 shadow-md p-5 sm:p-6 hover:shadow-lg transition">
+      {/* Header */}
+      <div className="flex justify-between items-start mb-3 gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <div
             className="p-2 rounded-lg shrink-0"
@@ -3273,100 +3579,113 @@ const SavingsCard = ({
           </div>
           <div className="rounded-lg border border-slate-200 bg-white p-2">
             <p className="text-slate-500">Withdraw</p>
-            <p className="font-semibold text-rose-700">{formatRM(scopeW)}</p>
+<p className="font-semibold text-rose-700">{formatRM(scopeW)}</p>
           </div>
         </div>
 
-        <div className="mt-2 text-[11px] text-slate-600">
-          ROI (selected):{" "}
-          <span className="font-semibold text-violet-700">
-            {roiScope.toFixed(2)}%
-          </span>
-          <span className="text-slate-400"> • </span>
-          <span className="text-slate-500">Completed transactions only</span>
+        <div className="mt-2 text-[11px] text-slate-500">
+          ROI (scoped): <b className="text-violet-700">{roiScope.toFixed(2)}%</b>
         </div>
       </div>
 
-      {/* Actions */}
-      <div className="mt-4 grid grid-cols-2 gap-2">
+      {/* Action buttons */}
+      <div className="mt-4 grid grid-cols-3 gap-2">
         <button
           type="button"
           onClick={onAddCapital}
           disabled={busy}
-          className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-sky-600 text-white text-sm font-semibold hover:opacity-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-sky-600 text-white text-sm font-semibold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
           aria-label="Add capital"
         >
-          <ArrowUpCircle className="w-4 h-4" /> + Capital
+          <Plus className="w-4 h-4" />
+          Capital
         </button>
 
         <button
           type="button"
           onClick={onAddDividend}
           disabled={busy}
-          className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-sm font-semibold hover:opacity-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-sm font-semibold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
           aria-label="Add dividend"
         >
-          <Trophy className="w-4 h-4" /> + Dividend
+          <Trophy className="w-4 h-4" />
+          Dividend
         </button>
 
         <button
           type="button"
           onClick={onWithdraw}
           disabled={busy}
-          className="col-span-2 flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 text-white text-sm font-semibold hover:opacity-95 transition disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 text-white text-sm font-semibold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
           aria-label="Withdraw"
         >
-          <MinusCircle className="w-4 h-4" /> Withdraw
+          <MinusCircle className="w-4 h-4" />
+          Withdraw
         </button>
-      </div>
-
-      <div className="mt-3 text-[11px] text-slate-500">
-        Projection fields never change actual balances. Record real
-        deposits/withdrawals as transactions.
       </div>
     </div>
   );
 };
 
-/* ------------------------------ small primitives ------------------------------ */
-
 const Field = ({ label, children }) => (
-  <label className="block">
-    <span className="text-xs font-semibold text-slate-600">{label}</span>
+  <div>
+    <label className="block text-sm font-semibold text-slate-700 mb-1">
+      {label}
+    </label>
     {children}
-  </label>
-);
-
-const Modal = ({ title, onClose, children }) => (
-  <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center">
-    <div
-      className="absolute inset-0 bg-black/35 backdrop-blur-[1px]"
-      onClick={onClose}
-      role="button"
-      tabIndex={0}
-      aria-label="Close modal"
-    />
-    <div className="relative w-full sm:max-w-xl bg-white rounded-t-3xl sm:rounded-3xl shadow-2xl border border-slate-100 max-h-[88vh] overflow-y-auto">
-      <div className="sticky top-0 bg-white/95 backdrop-blur border-b border-slate-100 px-5 py-4 flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <h3 className="text-base sm:text-lg font-semibold text-[#0b1222] truncate">
-            {title}
-          </h3>
-          <p className="text-[11px] text-slate-500 mt-1">
-            Month/year tracking • Net worth ready • No bank integration
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition"
-          aria-label="Close modal"
-        >
-          <X className="w-4 h-4 text-slate-700" />
-        </button>
-      </div>
-
-      <div className="px-5 py-4">{children}</div>
-    </div>
   </div>
 );
+
+const Modal = ({ title, onClose, children }) => {
+  useEffect(() => {
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = "auto";
+    };
+  }, []);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="modal-title"
+    >
+      <div
+        className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
+          <h2
+            id="modal-title"
+            className="text-xl font-bold text-[#0b1222] truncate"
+          >
+            {title}
+          </h2>
+          <button
+            type="button"
+            onClick={onClose}
+            className="p-2 rounded-xl hover:bg-slate-100 transition shrink-0"
+            aria-label="Close modal"
+          >
+            <X className="w-5 h-5 text-slate-700" />
+          </button>
+        </div>
+
+        <div className="px-6 py-5">{children}</div>
+      </div>
+    </div>
+  );
+};
+
+/* -------------------------------------------------------------------------- */
+/*                                Tailwind Classes                            */
+/* -------------------------------------------------------------------------- */
+
+const SELECT_UI =
+  "w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition disabled:opacity-50 disabled:cursor-not-allowed";
+
+const FILTER_SELECT =
+  "border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 transition";
+

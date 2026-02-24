@@ -1,7 +1,7 @@
 import SavingsAccount from "../models/SavingsAccount.js";
 import SavingsTransaction from "../models/SavingsTransaction.js";
-import { sanitize } from "../utils/sanitize.js"; // You'll need to create this
-import logger from "../utils/logger.js"; // You'll need to create this
+import { sanitize } from "../utils/sanitize.js";
+import logger from "../utils/logger.js";
 
 const SORT_DESC = -1;
 const DEFAULT_PAGE_SIZE = 50;
@@ -364,6 +364,95 @@ export async function deleteTransaction(req, res) {
 
     res.status(500).json({
       message: "Failed to delete transaction",
+    });
+  }
+}
+
+/**
+ * Bulk confirm pending transactions
+ */
+export async function bulkConfirmTransactions(req, res) {
+  const userId = req.user._id;
+
+  try {
+    const { transactionIds } = req.body;
+
+    // Validation
+    if (!Array.isArray(transactionIds) || transactionIds.length === 0) {
+      return res.status(400).json({
+        message: "transactionIds array is required and cannot be empty",
+      });
+    }
+
+    if (transactionIds.length > 50) {
+      return res.status(400).json({
+        message: "Cannot confirm more than 50 transactions at once",
+      });
+    }
+
+    // Validate all IDs are valid MongoDB ObjectIDs
+    const invalidIds = transactionIds.filter(
+      (id) => !id.match(/^[0-9a-fA-F]{24}$/)
+    );
+    if (invalidIds.length > 0) {
+      return res.status(400).json({
+        message: `Invalid transaction ID format: ${invalidIds.join(", ")}`,
+      });
+    }
+
+    // Find all transactions that belong to this user and are pending
+    const transactions = await SavingsTransaction.find({
+      _id: { $in: transactionIds },
+      userId,
+      status: "pending",
+    });
+
+    if (transactions.length === 0) {
+      return res.status(404).json({
+        message: "No pending transactions found to confirm",
+      });
+    }
+
+    // Update all to completed
+    const updateResults = await Promise.all(
+      transactions.map(async (tx) => {
+        tx.status = "completed";
+        await tx.save();
+        return {
+          id: tx._id,
+          accountId: tx.accountId,
+          type: tx.type,
+          amount: tx.amount,
+          year: tx.year,
+          month: tx.month,
+        };
+      })
+    );
+
+    // Audit log
+    logger.info("Bulk confirm transactions", {
+      userId,
+      count: updateResults.length,
+      transactionIds: updateResults.map((r) => r.id),
+      totalAmount: updateResults.reduce((sum, r) => sum + r.amount, 0),
+      ip: req.ip,
+      userAgent: req.get("user-agent"),
+    });
+
+    res.json({
+      message: `${updateResults.length} transaction${updateResults.length > 1 ? "s" : ""} confirmed successfully`,
+      confirmed: updateResults.length,
+      transactions: updateResults,
+    });
+  } catch (error) {
+    logger.error("Bulk confirm transactions error:", {
+      userId,
+      error: error.message,
+      stack: error.stack,
+    });
+
+    res.status(500).json({
+      message: "Failed to bulk confirm transactions",
     });
   }
 }
