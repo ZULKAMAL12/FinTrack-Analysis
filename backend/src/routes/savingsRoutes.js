@@ -1,13 +1,7 @@
-import express from "express";
-import rateLimit from "express-rate-limit";
+import { Router } from "express";
 import { requireAuth } from "../middleware/auth.js";
-import {
-  validateCreateAccount,
-  validateUpdateAccount,
-  validateCreateTransaction,
-  validateCreateRule,
-} from "../middleware/validateSavings.js";
 
+// Account controllers
 import {
   listAccounts,
   createAccount,
@@ -15,143 +9,83 @@ import {
   deleteAccount,
 } from "../controllers/savingsAccountsController.js";
 
+// Transaction controllers
 import {
   listTransactions,
   createTransaction,
-  patchTransaction,
+  updateTransaction,
   deleteTransaction,
   bulkConfirmTransactions,
 } from "../controllers/savingsTransactionsController.js";
 
+// Recurring rule controllers
 import {
   listRules,
   createRule,
   updateRule,
   deleteRule,
-  generateMissing,
+  generateMissingTransactions, // ✅ Correct name
 } from "../controllers/savingsRecurringController.js";
 
+// Stats controllers
+import {
+  getAlerts,
+  getDepositStats,
+} from "../controllers/savingsStatsController.js";
+
+// Export controllers
 import {
   exportTransactions,
   exportAccounts,
   exportYearlySummary,
 } from "../controllers/savingsExportController.js";
 
-import {
-  getSmartAlerts,
-  getDepositStats,
-} from "../controllers/savingsStatsController.js";
+const router = Router();
 
-const router = express.Router();
+// All routes require authentication
+router.use(requireAuth);
 
-// ============================================================================
-// Rate Limiters
-// ============================================================================
-const createLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 20, // 20 creates per minute
-  message: { message: "Too many create requests, please try again later." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// ========================
+// ACCOUNT ROUTES
+// ========================
+router.get("/accounts", listAccounts);
+router.post("/accounts", createAccount);
+router.put("/accounts/:id", updateAccount);
+router.delete("/accounts/:id", deleteAccount);
 
-const generateLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 3, // 3 generates per minute
-  message: { message: "Too many generation requests, please try again later." },
-});
+// ========================
+// TRANSACTION ROUTES
+// ========================
+router.get("/transactions", listTransactions);
+router.post("/transactions", createTransaction);
+router.patch("/transactions/:id", updateTransaction);
+router.delete("/transactions/:id", deleteTransaction);
 
-const exportLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 10, // 10 exports per minute
-  message: { message: "Too many export requests, please try again later." },
-});
+// Bulk confirm
+router.patch("/transactions/bulk-confirm", bulkConfirmTransactions);
 
-const statsLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 30, // 30 stats/alerts requests per minute
-  message: { message: "Too many stats requests, please try again later." },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// ========================
+// RECURRING RULE ROUTES
+// ========================
+router.get("/recurring-rules", listRules);
+router.post("/recurring-rules", createRule);
+router.put("/recurring-rules/:id", updateRule);
+router.delete("/recurring-rules/:id", deleteRule);
 
-// ============================================================================
-// Accounts
-// ============================================================================
-router.get("/accounts", requireAuth, listAccounts);
-router.post(
-  "/accounts",
-  requireAuth,
-  createLimiter,
-  validateCreateAccount,
-  createAccount,
-);
-router.put("/accounts/:id", requireAuth, validateUpdateAccount, updateAccount);
-router.delete("/accounts/:id", requireAuth, deleteAccount);
+// Generate missing recurring transactions
+router.post("/recurring-rules/generate-missing", generateMissingTransactions);
 
-// ============================================================================
-// Transactions
-// ============================================================================
-router.get("/transactions", requireAuth, listTransactions);
+// ========================
+// STATS ROUTES
+// ========================
+router.get("/alerts", getAlerts);
+router.get("/stats/deposits", getDepositStats);
 
-// ⚠️ IMPORTANT: Bulk confirm MUST be before /:id routes
-router.patch(
-  "/transactions/bulk-confirm",
-  requireAuth,
-  bulkConfirmTransactions,
-);
-
-router.post(
-  "/transactions",
-  requireAuth,
-  createLimiter,
-  validateCreateTransaction,
-  createTransaction,
-);
-router.patch("/transactions/:id", requireAuth, patchTransaction);
-router.delete("/transactions/:id", requireAuth, deleteTransaction);
-
-// ============================================================================
-// Recurring Rules
-// ============================================================================
-router.get("/recurring-rules", requireAuth, listRules);
-router.post(
-  "/recurring-rules",
-  requireAuth,
-  createLimiter,
-  validateCreateRule,
-  createRule,
-);
-router.put("/recurring-rules/:id", requireAuth, validateCreateRule, updateRule);
-router.delete("/recurring-rules/:id", requireAuth, deleteRule);
-router.post(
-  "/recurring-rules/generate-missing",
-  requireAuth,
-  generateLimiter,
-  generateMissing,
-);
-
-// ============================================================================
-// Stats & Alerts (Smart-Assist System) ⭐ NEW
-// ============================================================================
-router.get("/alerts", requireAuth, statsLimiter, getSmartAlerts);
-router.get("/stats/deposits", requireAuth, statsLimiter, getDepositStats);
-
-// ============================================================================
-// Export
-// ============================================================================
-router.get(
-  "/export/transactions",
-  requireAuth,
-  exportLimiter,
-  exportTransactions,
-);
-router.get("/export/accounts", requireAuth, exportLimiter, exportAccounts);
-router.get(
-  "/export/yearly-summary",
-  requireAuth,
-  exportLimiter,
-  exportYearlySummary,
-);
+// ========================
+// EXPORT ROUTES
+// ========================
+router.get("/export/transactions", exportTransactions);
+router.get("/export/accounts", exportAccounts);
+router.get("/export/yearly-summary", exportYearlySummary);
 
 export default router;

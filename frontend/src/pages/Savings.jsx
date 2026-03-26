@@ -4,44 +4,24 @@ import {
   PiggyBank,
   RefreshCw,
   Pencil,
-  MinusCircle,
   X,
   Loader2,
   CloudOff,
   Trash2,
-  Wallet,
-  LineChart as LineIcon,
-  PieChart as PieIcon,
-  ArrowUpCircle,
-  Trophy,
   Download,
   Calendar,
   Repeat,
   CheckCircle2,
   AlertCircle,
-  ChevronDown,
   TrendingUp,
   TrendingDown,
-  Minus,
   AlertTriangle,
   Flame,
   Target,
-  Zap,
+  Trophy,
+  Wallet,
+  Coins,
 } from "lucide-react";
-
-import {
-  AreaChart,
-  Area,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  ResponsiveContainer,
-  Legend,
-  Tooltip,
-  PieChart,
-  Pie,
-  Cell,
-} from "recharts";
 
 /* -------------------------------------------------------------------------- */
 /*                                    API                                     */
@@ -121,22 +101,6 @@ const MONTHS = [
   { value: 12, label: "Dec" },
 ];
 
-const RETURN_FREQ = [
-  {
-    value: "daily_working",
-    label: "Daily (working days, 252/yr) • Versa-i style",
-  },
-  { value: "daily_calendar", label: "Daily (calendar, 365/yr)" },
-  { value: "weekly", label: "Weekly" },
-  { value: "monthly", label: "Monthly" },
-  { value: "yearly", label: "Yearly (ASB/KWSP)" },
-];
-
-const WORKING_DAYS_PER_YEAR = 252;
-const CALENDAR_DAYS_PER_YEAR = 365;
-const WEEKS_PER_YEAR = 52;
-const MONTHS_PER_YEAR = 12;
-
 function safeNumber(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
@@ -189,81 +153,9 @@ function isValidDecimal(value) {
   return /^\d*\.?\d{0,2}$/.test(value);
 }
 
-function estimateReturn(
-  baseBalance,
-  ratePercent,
-  freq,
-  workingDays = WORKING_DAYS_PER_YEAR,
-) {
-  const cap = safeNumber(baseBalance, 0);
-  const rate = safeNumber(ratePercent, 0);
-  if (cap <= 0 || rate <= 0) return 0;
-
-  const annual = cap * (rate / 100);
-
-  switch (freq) {
-    case "daily_working":
-      return annual / workingDays;
-    case "daily_calendar":
-      return annual / CALENDAR_DAYS_PER_YEAR;
-    case "weekly":
-      return annual / WEEKS_PER_YEAR;
-    case "monthly":
-      return annual / MONTHS_PER_YEAR;
-    case "yearly":
-    default:
-      return annual;
-  }
-}
-
-function buildProjection12M(accounts, opts = {}) {
-  const { workingDays = WORKING_DAYS_PER_YEAR } = opts;
-  const months = [];
-  const now = new Date();
-
-  let totalValue = accounts.reduce(
-    (sum, a) => sum + safeNumber(a.currentBalance),
-    0,
-  );
-
-  for (let i = 0; i < 12; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() + i, 1);
-    const label = d.toLocaleString("en", { month: "short" });
-
-    const monthlyAdd = accounts.reduce(
-      (sum, a) => sum + safeNumber(a.monthlyContribution),
-      0,
-    );
-
-    const monthlyReturn = accounts.reduce((sum, a) => {
-      const base = safeNumber(a.currentBalance);
-      const rate = safeNumber(a.ratePercent);
-      const freq = a.returnFrequency || "daily_working";
-      const periodic = estimateReturn(base, rate, freq, workingDays);
-
-      if (freq === "daily_working") return sum + periodic * 21;
-      if (freq === "daily_calendar") return sum + periodic * 30;
-      if (freq === "weekly") return sum + periodic * 4.345;
-      if (freq === "monthly") return sum + periodic;
-      return sum + periodic / 12;
-    }, 0);
-
-    totalValue += monthlyAdd + monthlyReturn;
-
-    months.push({
-      month: label,
-      value: Number(totalValue.toFixed(2)),
-      add: Number(monthlyAdd.toFixed(2)),
-      ret: Number(monthlyReturn.toFixed(2)),
-    });
-  }
-
-  return months;
-}
-
 function txTypeLabel(t) {
-  if (t === "capital_add") return "Capital Add";
-  if (t === "dividend") return "Dividend/Interest";
+  if (t === "capital_add") return "Deposit";
+  if (t === "dividend") return "Interest/Dividend";
   if (t === "withdrawal") return "Withdrawal";
   return t || "Unknown";
 }
@@ -276,7 +168,7 @@ function statusBadge(status) {
 
 function sourceBadge(source) {
   if (source === "recurring")
-    return { text: "Recurring", cls: "bg-indigo-100 text-indigo-700" };
+    return { text: "Auto", cls: "bg-indigo-100 text-indigo-700" };
   return { text: "Manual", cls: "bg-slate-100 text-slate-700" };
 }
 
@@ -311,7 +203,6 @@ export default function SavingsPage() {
     loading: true,
     busy: false,
     error: "",
-    offlineSaveError: false,
   });
 
   const nowYM = useMemo(() => getNowYM(), []);
@@ -333,11 +224,7 @@ export default function SavingsPage() {
 
   const showToast = useCallback((msg, tone = "info") => {
     setToast({ show: true, msg, tone });
-
-    if (toastTimeoutRef.current) {
-      clearTimeout(toastTimeoutRef.current);
-    }
-
+    if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
     toastTimeoutRef.current = setTimeout(() => {
       setToast({ show: false, msg: "", tone: "info" });
     }, 2600);
@@ -345,51 +232,31 @@ export default function SavingsPage() {
 
   useEffect(() => {
     return () => {
-      if (toastTimeoutRef.current) {
-        clearTimeout(toastTimeoutRef.current);
-      }
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
+      if (toastTimeoutRef.current) clearTimeout(toastTimeoutRef.current);
+      if (abortControllerRef.current) abortControllerRef.current.abort();
     };
   }, []);
 
   /* ------------------------------ Modals ------------------------------ */
   const [addModal, setAddModal] = useState({
     open: false,
-    simpleMode: true,
     name: "",
     color: "#0ea5e9",
     goal: "",
     startingBalance: "",
-    lifetimeDividends: "",
-    ratePercent: "",
-    returnFrequency: "daily_working",
-    monthlyContribution: "",
     autoDepositReminder: false,
     recurringAmount: "",
     recurringDay: "5",
-    recurringStartYear: nowYM.year,
-    recurringStartMonth: nowYM.month,
-    recurringHasEnd: false,
-    recurringEndYear: nowYM.year,
-    recurringEndMonth: nowYM.month,
-    recurringMode: "pending",
     error: "",
   });
 
   const [editModal, setEditModal] = useState({
     open: false,
     id: null,
-    simpleMode: true,
     name: "",
     color: "#0ea5e9",
     goal: "",
     startingBalance: "",
-    ratePercent: "",
-    returnFrequency: "daily_working",
-    monthlyContribution: "",
-    autoDepositReminder: false,
     error: "",
   });
 
@@ -414,12 +281,6 @@ export default function SavingsPage() {
     accountName: "",
     amount: "",
     dayOfMonth: "5",
-    startYear: nowYM.year,
-    startMonth: nowYM.month,
-    hasEnd: false,
-    endYear: nowYM.year,
-    endMonth: nowYM.month,
-    modeSetting: "pending",
     isActive: true,
     error: "",
   });
@@ -461,9 +322,7 @@ export default function SavingsPage() {
           const active = rules.find((x) => x.isActive) || rules[0];
           if (active) rulesMap[a._id] = active;
         } catch (e) {
-          if (e.name !== "AbortError") {
-            console.error("Failed to load rules:", e);
-          }
+          if (e.name !== "AbortError") console.error("Failed to load rules:", e);
         }
       }),
     );
@@ -488,9 +347,7 @@ export default function SavingsPage() {
       const data = await apiFetch(API.ALERTS, { signal });
       setAlerts(data.alerts || []);
     } catch (e) {
-      if (e.name !== "AbortError") {
-        console.error("Failed to load alerts:", e);
-      }
+      if (e.name !== "AbortError") console.error("Failed to load alerts:", e);
     }
   }
 
@@ -499,9 +356,7 @@ export default function SavingsPage() {
       const data = await apiFetch(API.STATS_DEPOSITS, { signal });
       setDepositStats(data);
     } catch (e) {
-      if (e.name !== "AbortError") {
-        console.error("Failed to load deposit stats:", e);
-      }
+      if (e.name !== "AbortError") console.error("Failed to load deposit stats:", e);
     }
   }
 
@@ -509,26 +364,17 @@ export default function SavingsPage() {
     try {
       await apiFetch(API.RULE_GENERATE_MISSING, { method: "POST", signal });
     } catch (e) {
-      if (e.name !== "AbortError") {
-        console.error("Failed to generate recurring:", e);
-      }
+      if (e.name !== "AbortError") console.error("Failed to generate recurring:", e);
     }
   }
 
   async function loadAll() {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+    if (abortControllerRef.current) abortControllerRef.current.abort();
 
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
 
-    setStatus((s) => ({
-      ...s,
-      loading: true,
-      error: "",
-      offlineSaveError: false,
-    }));
+    setStatus((s) => ({ ...s, loading: true, error: "" }));
 
     try {
       await generateMissingRecurringIfAny(abortController.signal);
@@ -541,9 +387,7 @@ export default function SavingsPage() {
       didHydrateRef.current = true;
       setStatus((s) => ({ ...s, loading: false }));
     } catch (e) {
-      if (e.name === "AbortError") {
-        return;
-      }
+      if (e.name === "AbortError") return;
       setStatus((s) => ({
         ...s,
         loading: false,
@@ -583,9 +427,7 @@ export default function SavingsPage() {
       }
     })();
 
-    return () => {
-      abortController.abort();
-    };
+    return () => abortController.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter.year, filter.month, filter.accountId, filter.viewMode]);
 
@@ -593,117 +435,51 @@ export default function SavingsPage() {
   /*                               Derived Metrics                              */
   /* -------------------------------------------------------------------------- */
 
-  const scopedAggByAccount = useMemo(() => {
-    const map = {};
+  const totals = useMemo(() => {
+    let totalBalance = 0;
+    let totalSaved = 0;
+    let accountsWithGoals = 0;
+    let accountsNearGoal = 0;
+
     for (const a of accounts) {
-      map[a._id] = {
-        accountId: a._id,
-        accountName: a.name,
-        capitalAdded: 0,
-        dividends: 0,
-        withdrawals: 0,
-        contributedForROI: 0,
-      };
-    }
+      const balance = safeNumber(a.currentBalance);
+      const goal = safeNumber(a.goal);
 
-    for (const t of tx) {
-      const aid = t.accountId;
-      if (!map[aid]) continue;
-      if ((t.status || "completed") !== "completed") continue;
+      totalBalance += balance;
+      totalSaved += safeNumber(a.totalContributed);
 
-      const type = t.type;
-      const amt = safeNumber(t.amount, 0);
-
-      if (type === "capital_add") {
-        map[aid].capitalAdded += amt;
-        map[aid].contributedForROI += amt;
-      } else if (type === "dividend") {
-        map[aid].dividends += amt;
-      } else if (type === "withdrawal") {
-        map[aid].withdrawals += amt;
+      if (goal > 0) {
+        accountsWithGoals++;
+        const progress = (balance / goal) * 100;
+        if (progress >= 80) accountsNearGoal++;
       }
     }
 
-    return map;
-  }, [accounts, tx]);
-
-  const totals = useMemo(() => {
-    let contributed = 0;
-    let dividend = 0;
-    let withdrawn = 0;
-
-    for (const k of Object.keys(scopedAggByAccount)) {
-      contributed += scopedAggByAccount[k].contributedForROI;
-      dividend += scopedAggByAccount[k].dividends;
-      withdrawn += scopedAggByAccount[k].withdrawals;
-    }
-
-    const roi = contributed > 0 ? (dividend / contributed) * 100 : 0;
-
     return {
-      capital: contributed,
-      dividend,
-      withdrawn,
-      roi,
-      netWorthValue: accounts.reduce(
-        (sum, a) => sum + safeNumber(a.currentBalance),
-        0,
-      ),
+      totalBalance,
+      totalSaved,
+      accountsCount: accounts.length,
+      accountsWithGoals,
+      accountsNearGoal,
     };
-  }, [scopedAggByAccount, accounts]);
-
-  const thisMonthStats = useMemo(() => {
-    if (filter.viewMode !== "month" || !filter.month) return { add: 0, ret: 0 };
-    return { add: totals.capital, ret: totals.dividend };
-  }, [filter.viewMode, filter.month, totals.capital, totals.dividend]);
-
-  const allocationData = useMemo(() => {
-    return accounts
-      .map((a) => {
-        const value = safeNumber(a.currentBalance, 0);
-        return {
-          name: a.name || "Untitled",
-          value,
-          color: isHexColor(a.color) ? a.color : "#0ea5e9",
-        };
-      })
-      .filter((x) => x.value > 0);
   }, [accounts]);
-
-  const projection12m = useMemo(
-    () => buildProjection12M(accounts, { workingDays: WORKING_DAYS_PER_YEAR }),
-    [accounts],
-  );
 
   /* -------------------------------------------------------------------------- */
   /*                                CRUD Actions                                */
   /* -------------------------------------------------------------------------- */
 
   function openAddAccount() {
-    const { year, month } = getNowYM();
-    setAddModal((m) => ({
-      ...m,
+    setAddModal({
       open: true,
-      simpleMode: true,
       name: "",
       color: "#0ea5e9",
       goal: "",
       startingBalance: "",
-      lifetimeDividends: "",
-      ratePercent: "",
-      returnFrequency: "daily_working",
-      monthlyContribution: "",
       autoDepositReminder: false,
       recurringAmount: "",
       recurringDay: "5",
-      recurringStartYear: year,
-      recurringStartMonth: month,
-      recurringHasEnd: false,
-      recurringEndYear: year,
-      recurringEndMonth: month,
-      recurringMode: "pending",
       error: "",
-    }));
+    });
   }
 
   async function createAccount(e) {
@@ -726,23 +502,13 @@ export default function SavingsPage() {
       color: isHexColor(addModal.color) ? addModal.color : "#0ea5e9",
       goal: Math.max(safeNumber(addModal.goal, 0), 0),
       startingBalance: Math.max(safeNumber(addModal.startingBalance, 0), 0),
-      ratePercent: Math.max(safeNumber(addModal.ratePercent, 0), 0),
-      returnFrequency: addModal.returnFrequency || "daily_working",
-      monthlyContribution: Math.max(
-        safeNumber(addModal.monthlyContribution, 0),
-        0,
-      ),
+      ratePercent: 0,
+      returnFrequency: "monthly",
+      monthlyContribution: 0,
       autoDepositReminder: !!addModal.autoDepositReminder,
     };
 
-    const initialDiv = Math.max(safeNumber(addModal.lifetimeDividends, 0), 0);
-
-    setStatus((s) => ({
-      ...s,
-      busy: true,
-      error: "",
-      offlineSaveError: false,
-    }));
+    setStatus((s) => ({ ...s, busy: true, error: "" }));
 
     try {
       const res = await apiFetch(API.ACCOUNTS, {
@@ -750,28 +516,6 @@ export default function SavingsPage() {
         body: JSON.stringify(payload),
       });
       const created = res.account;
-
-      if (created?._id && initialDiv > 0) {
-        await apiFetch(API.TX, {
-          method: "POST",
-          body: JSON.stringify({
-            accountId: created._id,
-            type: "dividend",
-            amount: initialDiv,
-            status: "completed",
-            source: "manual",
-            year: filter.year,
-            month: filter.month || getNowYM().month,
-            day: 1,
-            dateISO: isoFromYMD(
-              filter.year,
-              filter.month || getNowYM().month,
-              1,
-            ),
-            notes: "Initial total dividends received (lifetime)",
-          }),
-        });
-      }
 
       if (
         created?._id &&
@@ -783,18 +527,9 @@ export default function SavingsPage() {
           amount: Math.max(safeNumber(addModal.recurringAmount, 0), 0),
           frequency: "monthly",
           dayOfMonth: clampInt(addModal.recurringDay || 5, 1, 28),
-          startYear: clampInt(addModal.recurringStartYear, 2000, 2100),
-          startMonth: clampInt(addModal.recurringStartMonth, 1, 12),
-          endYear: addModal.recurringHasEnd
-            ? clampInt(addModal.recurringEndYear, 2000, 2100)
-            : undefined,
-          endMonth: addModal.recurringHasEnd
-            ? clampInt(addModal.recurringEndMonth, 1, 12)
-            : undefined,
-          mode:
-            addModal.recurringMode === "auto_confirm"
-              ? "auto_confirm"
-              : "pending",
+          startYear: nowYM.year,
+          startMonth: nowYM.month,
+          mode: "pending",
           isActive: true,
         };
         try {
@@ -808,11 +543,11 @@ export default function SavingsPage() {
       }
 
       setAddModal((m) => ({ ...m, open: false }));
-      showToast("Account created", "ok");
+      showToast("Account created successfully", "ok");
       await loadAll();
       setStatus((s) => ({ ...s, busy: false }));
     } catch (e2) {
-      setStatus((s) => ({ ...s, busy: false, offlineSaveError: true }));
+      setStatus((s) => ({ ...s, busy: false }));
       setAddModal((m) => ({
         ...m,
         error: e2?.message || "Failed to create account.",
@@ -824,15 +559,10 @@ export default function SavingsPage() {
     setEditModal({
       open: true,
       id: acc._id,
-      simpleMode: true,
       name: acc.name || "",
       color: acc.color || "#0ea5e9",
       goal: String(safeNumber(acc.goal)),
       startingBalance: String(safeNumber(acc.startingBalance)),
-      ratePercent: String(safeNumber(acc.ratePercent)),
-      returnFrequency: acc.returnFrequency || "daily_working",
-      monthlyContribution: String(safeNumber(acc.monthlyContribution)),
-      autoDepositReminder: !!acc.autoDepositReminder,
       error: "",
     });
   }
@@ -842,10 +572,7 @@ export default function SavingsPage() {
 
     const name = String(editModal.name || "").trim();
     if (!name) {
-      return setEditModal((m) => ({
-        ...m,
-        error: "Account name is required.",
-      }));
+      return setEditModal((m) => ({ ...m, error: "Account name is required." }));
     }
 
     if (name.length > 100) {
@@ -860,21 +587,13 @@ export default function SavingsPage() {
       color: isHexColor(editModal.color) ? editModal.color : "#0ea5e9",
       goal: Math.max(safeNumber(editModal.goal, 0), 0),
       startingBalance: Math.max(safeNumber(editModal.startingBalance, 0), 0),
-      ratePercent: Math.max(safeNumber(editModal.ratePercent, 0), 0),
-      returnFrequency: editModal.returnFrequency || "daily_working",
-      monthlyContribution: Math.max(
-        safeNumber(editModal.monthlyContribution, 0),
-        0,
-      ),
-      autoDepositReminder: !!editModal.autoDepositReminder,
+      ratePercent: 0,
+      returnFrequency: "monthly",
+      monthlyContribution: 0,
+      autoDepositReminder: false,
     };
 
-    setStatus((s) => ({
-      ...s,
-      busy: true,
-      error: "",
-      offlineSaveError: false,
-    }));
+    setStatus((s) => ({ ...s, busy: true, error: "" }));
 
     try {
       await apiFetch(`${API.ACCOUNTS}/${editModal.id}`, {
@@ -882,11 +601,11 @@ export default function SavingsPage() {
         body: JSON.stringify(payload),
       });
       setEditModal((m) => ({ ...m, open: false }));
-      showToast("Account updated", "ok");
+      showToast("Account updated successfully", "ok");
       await loadAll();
       setStatus((s) => ({ ...s, busy: false }));
     } catch (e2) {
-      setStatus((s) => ({ ...s, busy: false, offlineSaveError: true }));
+      setStatus((s) => ({ ...s, busy: false }));
       setEditModal((m) => ({
         ...m,
         error: e2?.message || "Failed to update account.",
@@ -900,20 +619,15 @@ export default function SavingsPage() {
 
   async function confirmDelete() {
     if (!deleteModal.id) return;
-    setStatus((s) => ({
-      ...s,
-      busy: true,
-      error: "",
-      offlineSaveError: false,
-    }));
+    setStatus((s) => ({ ...s, busy: true, error: "" }));
     try {
       await apiFetch(`${API.ACCOUNTS}/${deleteModal.id}`, { method: "DELETE" });
       setDeleteModal({ open: false, id: null, name: "", error: "" });
-      showToast("Account deleted", "ok");
+      showToast("Account deleted successfully", "ok");
       await loadAll();
       setStatus((s) => ({ ...s, busy: false }));
     } catch (e) {
-      setStatus((s) => ({ ...s, busy: false, offlineSaveError: true }));
+      setStatus((s) => ({ ...s, busy: false }));
       setDeleteModal((m) => ({ ...m, error: e?.message || "Delete failed." }));
     }
   }
@@ -939,10 +653,7 @@ export default function SavingsPage() {
 
     const amount = safeNumber(txnModal.amount, -1);
     if (!Number.isFinite(amount) || amount <= 0) {
-      return setTxnModal((m) => ({
-        ...m,
-        error: "Enter a valid amount (> 0).",
-      }));
+      return setTxnModal((m) => ({ ...m, error: "Enter a valid amount (> 0)." }));
     }
 
     if (!isValidDecimal(txnModal.amount)) {
@@ -973,26 +684,19 @@ export default function SavingsPage() {
       dateISO: isoFromYMD(year, month, day),
       status: "completed",
       source: "manual",
-      notes: String(txnModal.note || "")
-        .trim()
-        .substring(0, 500),
+      notes: String(txnModal.note || "").trim().substring(0, 500),
     };
 
-    setStatus((s) => ({
-      ...s,
-      busy: true,
-      error: "",
-      offlineSaveError: false,
-    }));
+    setStatus((s) => ({ ...s, busy: true, error: "" }));
 
     try {
       await apiFetch(API.TX, { method: "POST", body: JSON.stringify(payload) });
       setTxnModal((m) => ({ ...m, open: false }));
-      showToast("Transaction saved", "ok");
+      showToast("Transaction saved successfully", "ok");
       await loadAll();
       setStatus((s) => ({ ...s, busy: false }));
     } catch (err) {
-      setStatus((s) => ({ ...s, busy: false, offlineSaveError: true }));
+      setStatus((s) => ({ ...s, busy: false }));
       setTxnModal((m) => ({
         ...m,
         error: err?.message || "Failed to save transaction.",
@@ -1001,44 +705,33 @@ export default function SavingsPage() {
   }
 
   async function confirmPendingTx(txn) {
-    setStatus((s) => ({
-      ...s,
-      busy: true,
-      error: "",
-      offlineSaveError: false,
-    }));
+    setStatus((s) => ({ ...s, busy: true, error: "" }));
     try {
       await apiFetch(API.TX_BY_ID(txn._id), {
         method: "PATCH",
         body: JSON.stringify({ status: "completed" }),
       });
-      showToast("Marked as completed", "ok");
+      showToast("Transaction confirmed", "ok");
       await loadAll();
       setStatus((s) => ({ ...s, busy: false }));
     } catch (e) {
-      setStatus((s) => ({ ...s, busy: false, offlineSaveError: true }));
+      setStatus((s) => ({ ...s, busy: false }));
       showToast(e?.message || "Failed to confirm", "warn");
     }
   }
 
-  // ⭐ NEW: Bulk confirm
   async function bulkConfirmPending(transactionIds) {
-    setStatus((s) => ({
-      ...s,
-      busy: true,
-      error: "",
-      offlineSaveError: false,
-    }));
+    setStatus((s) => ({ ...s, busy: true, error: "" }));
     try {
       await apiFetch(API.TX_BULK_CONFIRM, {
         method: "PATCH",
         body: JSON.stringify({ transactionIds }),
       });
-      showToast("All confirmed!", "ok");
+      showToast("All transactions confirmed!", "ok");
       await loadAll();
       setStatus((s) => ({ ...s, busy: false }));
     } catch (e) {
-      setStatus((s) => ({ ...s, busy: false, offlineSaveError: true }));
+      setStatus((s) => ({ ...s, busy: false }));
       showToast(e?.message || "Failed to bulk confirm", "warn");
     }
   }
@@ -1054,13 +747,6 @@ export default function SavingsPage() {
         accountName: acc.name,
         amount: String(safeNumber(existing.amount)),
         dayOfMonth: String(clampInt(existing.dayOfMonth || 5, 1, 28)),
-        startYear: clampInt(existing.startYear || nowYM.year, 2000, 2100),
-        startMonth: clampInt(existing.startMonth || nowYM.month, 1, 12),
-        hasEnd: !!(existing.endYear && existing.endMonth),
-        endYear: clampInt(existing.endYear || nowYM.year, 2000, 2100),
-        endMonth: clampInt(existing.endMonth || nowYM.month, 1, 12),
-        modeSetting:
-          existing.mode === "auto_confirm" ? "auto_confirm" : "pending",
         isActive: existing.isActive !== false,
         error: "",
       });
@@ -1073,12 +759,6 @@ export default function SavingsPage() {
         accountName: acc.name,
         amount: "",
         dayOfMonth: "5",
-        startYear: nowYM.year,
-        startMonth: nowYM.month,
-        hasEnd: false,
-        endYear: nowYM.year,
-        endMonth: nowYM.month,
-        modeSetting: "pending",
         isActive: true,
         error: "",
       });
@@ -1105,29 +785,13 @@ export default function SavingsPage() {
       amount: Math.max(amount, 0),
       frequency: "monthly",
       dayOfMonth: clampInt(ruleModal.dayOfMonth || 5, 1, 28),
-      startYear: clampInt(ruleModal.startYear, 2000, 2100),
-      startMonth: clampInt(ruleModal.startMonth, 1, 12),
-      endYear: ruleModal.hasEnd
-        ? clampInt(ruleModal.endYear, 2000, 2100)
-        : undefined,
-      endMonth: ruleModal.hasEnd
-        ? clampInt(ruleModal.endMonth, 1, 12)
-        : undefined,
-      mode:
-        ruleModal.modeSetting === "auto_confirm" ? "auto_confirm" : "pending",
+      startYear: nowYM.year,
+      startMonth: nowYM.month,
+      mode: "pending",
       isActive: !!ruleModal.isActive,
     };
 
-    if (payload.mode === "auto_confirm") {
-      showToast("Auto-confirm assumes you deposited. Use carefully.", "warn");
-    }
-
-    setStatus((s) => ({
-      ...s,
-      busy: true,
-      error: "",
-      offlineSaveError: false,
-    }));
+    setStatus((s) => ({ ...s, busy: true, error: "" }));
     try {
       if (ruleModal.mode === "edit" && ruleModal.ruleId) {
         await apiFetch(API.RULE_BY_ID(ruleModal.ruleId), {
@@ -1141,14 +805,14 @@ export default function SavingsPage() {
         });
       }
       setRuleModal((m) => ({ ...m, open: false }));
-      showToast("Recurring rule saved", "ok");
+      showToast("Reminder saved successfully", "ok");
       await loadAll();
       setStatus((s) => ({ ...s, busy: false }));
     } catch (err) {
-      setStatus((s) => ({ ...s, busy: false, offlineSaveError: true }));
+      setStatus((s) => ({ ...s, busy: false }));
       setRuleModal((m) => ({
         ...m,
-        error: err?.message || "Failed to save rule.",
+        error: err?.message || "Failed to save reminder.",
       }));
     }
   }
@@ -1158,15 +822,14 @@ export default function SavingsPage() {
   /* -------------------------------------------------------------------------- */
 
   function openExport() {
-    setExportModal((m) => ({
-      ...m,
+    setExportModal({
       open: true,
       exportType: "transactions",
       year: filter.year,
       accountId: filter.accountId,
       error: "",
       busy: false,
-    }));
+    });
   }
 
   async function runExport(e) {
@@ -1212,7 +875,7 @@ export default function SavingsPage() {
 
       downloadBlob(blob, filename);
       setExportModal((m) => ({ ...m, open: false, busy: false }));
-      showToast("CSV download started", "ok");
+      showToast("Export started successfully", "ok");
     } catch (err) {
       setExportModal((m) => ({
         ...m,
@@ -1252,29 +915,28 @@ export default function SavingsPage() {
   ]);
 
   return (
-    <main className="min-h-screen bg-gradient-to-br from-[#f9fbff] via-[#edf4ff] to-[#e5edff] px-4 sm:px-6 md:px-10 lg:px-12 py-8 font-inter overflow-hidden">
+    <main className="min-h-screen bg-gradient-to-br from-[#f9fbff] via-[#edf4ff] to-[#e5edff] px-4 sm:px-6 md:px-10 lg:px-12 py-8 font-inter">
       {/* Header */}
-      <header className="mb-6 flex flex-col gap-4">
-        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+      <header className="mb-6">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-4">
           <div>
             <h1 className="text-3xl sm:text-4xl font-bold text-[#0b1222]">
               Savings Tracker
             </h1>
             <p className="text-slate-600 text-sm sm:text-base mt-1">
-              Net-worth ready savings tracking with smart-assist, recurring reminders, and insights.
+              Simple savings tracking with smart reminders
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
             <button
               onClick={() => loadAll()}
-              className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 hover:bg-slate-50 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 hover:bg-slate-50 transition disabled:opacity-50"
               type="button"
               disabled={status.busy || status.loading}
-              aria-label="Refresh data"
             >
               <RefreshCw
-                className={`w-4 h-4 text-slate-700 ${status.loading ? "animate-spin" : ""}`}
+                className={`w-4 h-4 ${status.loading ? "animate-spin" : ""}`}
               />
               Refresh
             </button>
@@ -1283,17 +945,15 @@ export default function SavingsPage() {
               onClick={openExport}
               className="flex-1 md:flex-none flex items-center justify-center gap-2 px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-800 hover:bg-slate-50 transition"
               type="button"
-              aria-label="Export to CSV"
             >
-              <Download className="w-4 h-4 text-slate-700" />
-              Export CSV
+              <Download className="w-4 h-4" />
+              Export
             </button>
 
             <button
               onClick={openAddAccount}
               className="flex-1 md:flex-none flex items-center justify-center gap-2 bg-gradient-to-r from-blue-500 to-sky-600 text-white px-5 py-2 rounded-xl shadow hover:scale-[1.02] transition"
               type="button"
-              aria-label="Add new account"
             >
               <Plus className="w-4 h-4" /> Add Account
             </button>
@@ -1332,8 +992,7 @@ export default function SavingsPage() {
                     year: clampInt(e.target.value, 2000, 2100),
                   }))
                 }
-                className={FILTER_SELECT}
-                aria-label="Select year"
+                className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-900 text-xs font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
               >
                 {years.map((y) => (
                   <option key={y} value={y}>
@@ -1351,8 +1010,7 @@ export default function SavingsPage() {
                       month: clampInt(e.target.value, 1, 12),
                     }))
                   }
-                  className={FILTER_SELECT}
-                  aria-label="Select month"
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-900 text-xs font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500"
                 >
                   {MONTHS.map((m) => (
                     <option key={m.value} value={m.value}>
@@ -1369,8 +1027,7 @@ export default function SavingsPage() {
                 onChange={(e) =>
                   setFilter((f) => ({ ...f, accountId: e.target.value }))
                 }
-                className={`${FILTER_SELECT} min-w-[180px]`}
-                aria-label="Select account"
+                className="px-3 py-2 rounded-xl border border-slate-300 bg-white text-slate-900 text-xs font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-sky-500 min-w-[180px]"
               >
                 <option value="all">All accounts</option>
                 {accounts.map((a) => (
@@ -1389,22 +1046,19 @@ export default function SavingsPage() {
                 {filter.viewMode === "month"
                   ? yyyymmToLabel(filter.year, filter.month || nowYM.month)
                   : `Year ${filter.year}`}
-              </span>{" "}
-              {filter.accountId !== "all"
-                ? "• Selected account only"
-                : "• All accounts"}
+              </span>
             </div>
           </div>
         </div>
       </header>
 
-      {(status.error || status.offlineSaveError) && (
+      {status.error && (
         <div
           className="mb-5 rounded-2xl border border-rose-200 bg-rose-50 px-5 py-3 text-sm text-rose-700 flex items-center gap-2"
           role="alert"
         >
           <CloudOff className="w-4 h-4" />
-          {status.error || "Backend request failed. Check server + token."}
+          {status.error}
         </div>
       )}
 
@@ -1413,7 +1067,6 @@ export default function SavingsPage() {
         <div
           className="fixed bottom-4 left-1/2 -translate-x-1/2 z-[60]"
           role="alert"
-          aria-live="polite"
         >
           <div
             className={`rounded-2xl px-4 py-3 shadow-lg border text-sm flex items-center gap-2 ${
@@ -1434,178 +1087,50 @@ export default function SavingsPage() {
         </div>
       )}
 
-      {/* ⭐ NEW: Smart Alerts Widget */}
+      {/* Smart Alerts */}
       {alerts.length > 0 && (
         <section className="mb-8">
           <SmartAlertsWidget alerts={alerts} />
         </section>
       )}
 
-      {/* ⭐ NEW: This Month vs Last Month */}
+      {/* Month Comparison */}
       {depositStats && (
         <section className="mb-8">
           <MonthComparisonWidget stats={depositStats} />
         </section>
       )}
 
-      {/* Summary Cards */}
-      <section className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6 mb-8">
-        <SummaryCard
-          label={
-            filter.viewMode === "month"
-              ? "Capital Added (this month)"
-              : "Capital Added (this year)"
-          }
-          color="text-sky-600"
-          value={formatRM(totals.capital)}
-          sub="Actual (completed) transactions only"
+      {/* Quick Stats Dashboard */}
+      <section className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-5 mb-8">
+        <QuickStatCard
+          icon={<Wallet className="w-5 h-5 text-sky-600" />}
+          label="Total Balance"
+          value={formatRM(totals.totalBalance)}
+          subtitle="Current net worth"
         />
-        <SummaryCard
-          label={
-            filter.viewMode === "month"
-              ? "Dividends/Interest (this month)"
-              : "Dividends/Interest (this year)"
-          }
-          color="text-emerald-600"
-          value={formatRM(totals.dividend)}
-          sub="Actual (completed) transactions only"
+        <QuickStatCard
+          icon={<Coins className="w-5 h-5 text-emerald-600" />}
+          label="Total Saved"
+          value={formatRM(totals.totalSaved)}
+          subtitle="Lifetime contributions"
         />
-        <SummaryCard
-          label="Net Worth Value (current)"
-          color="text-indigo-600"
-          value={formatRM(totals.netWorthValue)}
-          sub="Allocation uses current balances"
+        <QuickStatCard
+          icon={<PiggyBank className="w-5 h-5 text-indigo-600" />}
+          label="Accounts"
+          value={totals.accountsCount}
+          subtitle={`${totals.accountsWithGoals} with goals`}
         />
-        <SummaryCard
-          label="ROI (actual)"
-          color="text-violet-600"
-          value={`${totals.roi.toFixed(2)}%`}
-          sub="Dividends ÷ Contributed (completed, scoped)"
+        <QuickStatCard
+          icon={<Trophy className="w-5 h-5 text-amber-600" />}
+          label="Near Goal"
+          value={totals.accountsNearGoal}
+          subtitle="80%+ progress"
         />
       </section>
 
-      {/* Charts */}
-      <section className="grid lg:grid-cols-2 gap-6 sm:gap-8 mb-10">
-        {/* Allocation */}
-        <div className="bg-white/90 backdrop-blur-lg rounded-2xl border border-gray-100 p-5 sm:p-6 shadow-lg">
-          <div className="flex items-start justify-between gap-3 mb-3">
-            <div>
-              <h2 className="text-lg font-semibold text-[#0b1222] flex items-center gap-2">
-                <PieIcon className="w-5 h-5 text-indigo-600" /> Allocation
-              </h2>
-              <p className="text-xs text-slate-500 mt-1">
-                Current net worth by account (balances, not projection).
-              </p>
-            </div>
-            <div className="text-[11px] text-slate-500">
-              Not affected by month/year filter
-            </div>
-          </div>
-
-          {allocationData.length === 0 ? (
-            <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-slate-700">
-              No allocation yet (add accounts / balances).
-            </div>
-          ) : (
-            <div className="h-[260px] sm:h-[280px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={allocationData}
-                    dataKey="value"
-                    nameKey="name"
-                    innerRadius={55}
-                    outerRadius={100}
-                    paddingAngle={3}
-                    labelLine={false}
-                  >
-                    {allocationData.map((x, i) => (
-                      <Cell key={i} fill={x.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip formatter={(value) => formatRM(value)} />
-                  <Legend />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </div>
-
-        {/* Projection */}
-        <div className="bg-white/90 backdrop-blur-lg rounded-2xl border border-gray-100 p-5 sm:p-6 shadow-lg">
-          <div className="flex items-start justify-between gap-3 mb-3">
-            <div>
-              <h2 className="text-lg font-semibold text-[#0b1222] flex items-center gap-2">
-                <LineIcon className="w-5 h-5 text-sky-600" /> 12-Month
-                Projection
-              </h2>
-              <p className="text-xs text-slate-500 mt-1">
-                Projection only: uses monthly plan + expected rate.{" "}
-                <span className="font-semibold">Never auto-adds</span> to actual
-                values.
-              </p>
-            </div>
-          </div>
-
-          <div className="h-[260px] sm:h-[280px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={projection12m}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
-                <XAxis dataKey="month" stroke="#64748b" />
-                <YAxis stroke="#94a3b8" />
-                <Tooltip
-                  formatter={(v, k) => {
-                    if (k === "value") return [formatRM(v), "Projected total"];
-                    if (k === "add") return [formatRM(v), "Monthly plan add"];
-                    if (k === "ret") return [formatRM(v), "Estimated return"];
-                    return [v, k];
-                  }}
-                />
-                <Legend />
-                <Area
-                  type="monotone"
-                  dataKey="value"
-                  stroke="#0ea5e9"
-                  fill="#0ea5e9"
-                  fillOpacity={0.15}
-                  name="Projected Total"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-
-          <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-            <MiniStat
-              label={
-                filter.viewMode === "month"
-                  ? "This month add (actual)"
-                  : "Selected period add (actual)"
-              }
-              value={formatRM(thisMonthStats.add)}
-              icon={<Wallet className="w-4 h-4 text-slate-700" />}
-            />
-            <MiniStat
-              label={
-                filter.viewMode === "month"
-                  ? "This month return (actual)"
-                  : "Selected period return (actual)"
-              }
-              value={formatRM(thisMonthStats.ret)}
-              icon={<PiggyBank className="w-4 h-4 text-slate-700" />}
-            />
-            <MiniStat
-              label="12M projected total"
-              value={formatRM(
-                projection12m?.[11]?.value || totals.netWorthValue,
-              )}
-              icon={<LineIcon className="w-4 h-4 text-slate-700" />}
-            />
-          </div>
-        </div>
-      </section>
-
-      {/* ⭐ NEW: Pending Deposits with Bulk Confirm */}
-      <section className="mb-10">
+      {/* Pending Deposits */}
+      <section className="mb-8">
         <PendingDepositsWidget
           pendingTx={pendingTx}
           accounts={accounts}
@@ -1625,67 +1150,73 @@ export default function SavingsPage() {
           Loading savings accounts...
         </div>
       ) : (
-        <section className="grid md:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-8">
+        <section className="grid md:grid-cols-2 lg:grid-cols-3 gap-5 sm:gap-6 mb-8">
           {accounts.map((acc) => (
             <SavingsCard
               key={acc._id}
               acc={acc}
               busy={status.busy}
               rule={rulesByAccount[acc._id]}
-              scopedAgg={scopedAggByAccount[acc._id]}
               onEdit={() => openEditAccount(acc)}
               onDelete={() => openDelete(acc)}
-              onAddCapital={() => openTxn(acc, "capital_add")}
-              onAddDividend={() => openTxn(acc, "dividend")}
+              onAddDeposit={() => openTxn(acc, "capital_add")}
+              onAddInterest={() => openTxn(acc, "dividend")}
               onWithdraw={() => openTxn(acc, "withdrawal")}
               onEditRule={() => openRuleEditor(acc)}
             />
           ))}
 
           {accounts.length === 0 && (
-            <div className="col-span-full rounded-2xl border border-slate-200 bg-white p-6 text-slate-700">
-              No savings accounts yet. Click <b>Add Account</b> to create one.
+            <div className="col-span-full rounded-2xl border-2 border-dashed border-slate-300 bg-white p-8 text-center">
+              <PiggyBank className="w-12 h-12 text-slate-400 mx-auto mb-3" />
+              <p className="text-slate-700 font-medium mb-2">
+                No savings accounts yet
+              </p>
+              <p className="text-sm text-slate-500 mb-4">
+                Get started by creating your first savings account
+              </p>
+              <button
+                onClick={openAddAccount}
+                className="inline-flex items-center gap-2 bg-gradient-to-r from-blue-500 to-sky-600 text-white px-5 py-2 rounded-xl shadow hover:scale-[1.02] transition"
+              >
+                <Plus className="w-4 h-4" /> Add Your First Account
+              </button>
             </div>
           )}
         </section>
       )}
 
-      {/* History List */}
-      <section className="mt-10">
+      {/* Transaction History */}
+      <section>
         <div className="bg-white/90 backdrop-blur-lg rounded-2xl border border-slate-100 shadow-sm p-5">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
             <div>
               <h3 className="text-base font-semibold text-[#0b1222]">
-                History (Actual Transactions)
+                Transaction History
               </h3>
               <p className="text-xs text-slate-500 mt-1">
-                Shows your recorded history in the selected view. Pending
-                entries are included and marked.
+                All your deposits, interest, and withdrawals
               </p>
             </div>
 
             <div className="text-xs text-slate-500">
               {filter.viewMode === "month"
                 ? yyyymmToLabel(filter.year, filter.month || nowYM.month)
-                : `Year ${filter.year}`}{" "}
-              •{" "}
-              {filter.accountId === "all" ? "All accounts" : "Selected account"}
+                : `Year ${filter.year}`}
             </div>
           </div>
 
           {tx.length === 0 ? (
-            <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-slate-700 text-sm">
-              No transactions found for this filter.
+            <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-slate-700 text-sm text-center">
+              No transactions found for this period
             </div>
           ) : (
-            <div className="mt-4 overflow-x-auto">
+            <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="text-left text-slate-600 border-b">
-                    <th className="py-2 pr-4">#</th>
+                    <th className="py-2 pr-4">Date</th>
                     <th className="py-2 pr-4">Account</th>
-                    <th className="py-2 pr-4">Year</th>
-                    <th className="py-2 pr-4">Month</th>
                     <th className="py-2 pr-4">Type</th>
                     <th className="py-2 pr-4">Amount</th>
                     <th className="py-2 pr-4">Status</th>
@@ -1710,23 +1241,21 @@ export default function SavingsPage() {
                     .map((t, idx) => (
                       <tr
                         key={t._id || idx}
-                        className="border-b last:border-b-0"
+                        className="border-b last:border-b-0 hover:bg-slate-50"
                       >
-                        <td className="py-2 pr-4 text-slate-500">{idx + 1}</td>
+                        <td className="py-2 pr-4 text-slate-700">
+                          {yyyymmToLabel(t.year, t.month)}
+                          {t.day ? `, ${t.day}` : ""}
+                        </td>
                         <td className="py-2 pr-4 font-medium text-slate-800">
                           {t.accountName ||
                             accounts.find((a) => a._id === t.accountId)?.name ||
                             "—"}
                         </td>
-                        <td className="py-2 pr-4 text-slate-500">{t.year}</td>
-                        <td className="py-2 pr-4 text-slate-500">
-                          {MONTHS.find((m) => m.value === t.month)?.label ||
-                            t.month}
-                        </td>
-                        <td className="py-2 pr-4 text-slate-500">
+                        <td className="py-2 pr-4 text-slate-600">
                           {txTypeLabel(t.type)}
                         </td>
-                        <td className="py-2 pr-4 text-slate-500">
+                        <td className="py-2 pr-4 font-semibold text-slate-900">
                           {formatRM(t.amount)}
                         </td>
                         <td className="py-2 pr-4">
@@ -1743,7 +1272,7 @@ export default function SavingsPage() {
                             {sourceBadge(t.source).text}
                           </span>
                         </td>
-                        <td className="py-2 pr-4 text-slate-600">
+                        <td className="py-2 pr-4 text-slate-600 max-w-xs truncate">
                           {t.notes || "—"}
                         </td>
                       </tr>
@@ -1752,11 +1281,6 @@ export default function SavingsPage() {
               </table>
             </div>
           )}
-
-          <div className="mt-3 text-[11px] text-slate-500">
-            Projection values are <b>not</b> part of history and are never
-            exported as actual transactions.
-          </div>
         </div>
       </section>
 
@@ -1777,21 +1301,7 @@ export default function SavingsPage() {
             </div>
           )}
 
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-xs text-slate-600 font-semibold">Mode</div>
-            <Segment
-              value={addModal.simpleMode ? "simple" : "advanced"}
-              onChange={(v) =>
-                setAddModal((m) => ({ ...m, simpleMode: v === "simple" }))
-              }
-              options={[
-                { value: "simple", label: "Simple" },
-                { value: "advanced", label: "Advanced" },
-              ]}
-            />
-          </div>
-
-          <form onSubmit={createAccount} className="space-y-3">
+          <form onSubmit={createAccount} className="space-y-4">
             <Field label="Account Name">
               <input
                 value={addModal.name}
@@ -1802,15 +1312,14 @@ export default function SavingsPage() {
                     error: "",
                   }))
                 }
-                className={`mt-1 ${SELECT_UI}`}
-                placeholder="ASB / Versa-i / Bank / Emergency Fund"
+                className={INPUT_CLASS}
+                placeholder="Emergency Fund, Vacation, etc."
                 maxLength={100}
                 required
-                aria-required="true"
               />
             </Field>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               <Field label="Color">
                 <input
                   type="color"
@@ -1818,161 +1327,55 @@ export default function SavingsPage() {
                   onChange={(e) =>
                     setAddModal((m) => ({ ...m, color: e.target.value }))
                   }
-                  className="mt-1 w-full border rounded-lg px-3 py-2 h-[42px]"
+                  className="w-full border rounded-xl px-3 py-2 h-[42px]"
                 />
               </Field>
 
-              <Field label="Goal (RM)">
+              <Field label="Goal Amount (RM)">
                 <input
                   type="number"
-                  inputMode="decimal"
                   step="0.01"
                   min="0"
-                  max="999999999"
                   value={addModal.goal}
                   onChange={(e) => {
                     if (isValidDecimal(e.target.value)) {
                       setAddModal((m) => ({ ...m, goal: e.target.value }));
                     }
                   }}
-                  className={`mt-1 ${SELECT_UI}`}
+                  className={INPUT_CLASS}
                   placeholder="5000"
                 />
               </Field>
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Starting Balance (RM)">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step="0.01"
-                  min="0"
-                  max="999999999"
-                  value={addModal.startingBalance}
-                  onChange={(e) => {
-                    if (isValidDecimal(e.target.value)) {
-                      setAddModal((m) => ({
-                        ...m,
-                        startingBalance: e.target.value,
-                      }));
-                    }
-                  }}
-                  className={`mt-1 ${SELECT_UI}`}
-                  placeholder="10000"
-                />
-              </Field>
-
-              {!addModal.simpleMode && (
-                <Field label="Total Dividends Received (lifetime) (RM)">
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="0.01"
-                    min="0"
-                    max="999999999"
-                    value={addModal.lifetimeDividends}
-                    onChange={(e) => {
-                      if (isValidDecimal(e.target.value)) {
-                        setAddModal((m) => ({
-                          ...m,
-                          lifetimeDividends: e.target.value,
-                        }));
-                      }
-                    }}
-                    className={`mt-1 ${SELECT_UI}`}
-                    placeholder="120"
-                  />
-                </Field>
-              )}
-            </div>
-
-            {!addModal.simpleMode && (
-              <>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Expected Rate (% p.a.)">
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      step="0.01"
-                      min="0"
-                      max="100"
-                      value={addModal.ratePercent}
-                      onChange={(e) => {
-                        if (isValidDecimal(e.target.value)) {
-                          setAddModal((m) => ({
-                            ...m,
-                            ratePercent: e.target.value,
-                          }));
-                        }
-                      }}
-                      className={`mt-1 ${SELECT_UI}`}
-                      placeholder="3.14"
-                    />
-                  </Field>
-
-                  <Field label="Return Frequency">
-                    <select
-                      value={addModal.returnFrequency}
-                      onChange={(e) =>
-                        setAddModal((m) => ({
-                          ...m,
-                          returnFrequency: e.target.value,
-                        }))
-                      }
-                      className={`mt-1 ${SELECT_UI}`}
-                    >
-                      {RETURN_FREQ.map((f) => (
-                        <option key={f.value} value={f.value}>
-                          {f.label}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
-              </>
-            )}
-
-            <Field label="Monthly Contribution Plan (RM) • Projection only">
+            <Field label="Current Balance (RM)">
               <input
                 type="number"
-                inputMode="decimal"
                 step="0.01"
                 min="0"
-                max="999999999"
-                value={addModal.monthlyContribution}
+                value={addModal.startingBalance}
                 onChange={(e) => {
                   if (isValidDecimal(e.target.value)) {
                     setAddModal((m) => ({
                       ...m,
-                      monthlyContribution: e.target.value,
+                      startingBalance: e.target.value,
                     }));
                   }
                 }}
-                className={`mt-1 ${SELECT_UI}`}
-                placeholder="200"
+                className={INPUT_CLASS}
+                placeholder="1000"
               />
-              <p className="text-[11px] text-slate-500 mt-1">
-                Projection only (planning). It does <b>not</b> auto-add money.
-                Record actual top-ups using "+ Capital".
-              </p>
             </Field>
 
-            {/* Auto Deposit Reminder (Recurring Rule) */}
-            <div className="rounded-xl border bg-slate-50 px-3 py-3">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-slate-700">
-                  <Repeat className="w-4 h-4" />
-                  <div>
-                    <p className="text-sm font-semibold">
-                      Auto Deposit Reminder
-                    </p>
-                    <p className="text-[11px] text-slate-500">
-                      Creates recurring deposit entries (no bank integration).
-                    </p>
-                  </div>
+            {/* Auto Reminder */}
+            <div className="rounded-xl border bg-slate-50 p-4">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <Repeat className="w-4 h-4 text-slate-700" />
+                  <span className="text-sm font-semibold text-slate-700">
+                    Monthly Deposit Reminder
+                  </span>
                 </div>
-
                 <button
                   type="button"
                   onClick={() =>
@@ -1984,224 +1387,50 @@ export default function SavingsPage() {
                   className={`px-3 py-1 rounded-lg text-sm font-medium ${
                     addModal.autoDepositReminder
                       ? "bg-emerald-100 text-emerald-700"
-                      : "bg-gray-100 text-gray-600"
+                      : "bg-slate-200 text-slate-600"
                   }`}
-                  aria-label="Toggle auto deposit reminder"
                 >
                   {addModal.autoDepositReminder ? "ON" : "OFF"}
                 </button>
               </div>
 
               {addModal.autoDepositReminder && (
-                <div className="mt-3 space-y-3">
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label="Recurring Amount (RM/month)">
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        step="0.01"
-                        min="0"
-                        max="999999999"
-                        value={addModal.recurringAmount}
-                        onChange={(e) => {
-                          if (isValidDecimal(e.target.value)) {
-                            setAddModal((m) => ({
-                              ...m,
-                              recurringAmount: e.target.value,
-                            }));
-                          }
-                        }}
-                        className={`mt-1 ${SELECT_UI}`}
-                        placeholder="100"
-                      />
-                    </Field>
-
-                    <Field label="Day of Month (1-28)">
-                      <input
-                        type="number"
-                        min="1"
-                        max="28"
-                        value={addModal.recurringDay}
-                        onChange={(e) =>
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <Field label="Amount (RM/month)">
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={addModal.recurringAmount}
+                      onChange={(e) => {
+                        if (isValidDecimal(e.target.value)) {
                           setAddModal((m) => ({
                             ...m,
-                            recurringDay: e.target.value,
-                          }))
+                            recurringAmount: e.target.value,
+                          }));
                         }
-                        className={`mt-1 ${SELECT_UI}`}
-                        placeholder="5"
-                      />
-                    </Field>
-                  </div>
+                      }}
+                      className={INPUT_CLASS}
+                      placeholder="100"
+                    />
+                  </Field>
 
-                  <div className="grid grid-cols-2 gap-3">
-                    <Field label="Start (Year)">
-                      <select
-                        value={addModal.recurringStartYear}
-                        onChange={(e) =>
-                          setAddModal((m) => ({
-                            ...m,
-                            recurringStartYear: clampInt(
-                              e.target.value,
-                              2000,
-                              2100,
-                            ),
-                          }))
-                        }
-                        className={`mt-1 ${SELECT_UI}`}
-                      >
-                        {years
-                          .slice()
-                          .reverse()
-                          .map((y) => (
-                            <option key={y} value={y}>
-                              {y}
-                            </option>
-                          ))}
-                      </select>
-                    </Field>
-                    <Field label="Start (Month)">
-                      <select
-                        value={addModal.recurringStartMonth}
-                        onChange={(e) =>
-                          setAddModal((m) => ({
-                            ...m,
-                            recurringStartMonth: clampInt(
-                              e.target.value,
-                              1,
-                              12,
-                            ),
-                          }))
-                        }
-                        className={`mt-1 ${SELECT_UI}`}
-                      >
-                        {MONTHS.map((mm) => (
-                          <option key={mm.value} value={mm.value}>
-                            {mm.label}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                  </div>
-
-                  <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2">
-                    <div className="text-sm text-slate-700 font-medium">
-                      End month (optional)
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() =>
+                  <Field label="Day of Month">
+                    <input
+                      type="number"
+                      min="1"
+                      max="28"
+                      value={addModal.recurringDay}
+                      onChange={(e) =>
                         setAddModal((m) => ({
                           ...m,
-                          recurringHasEnd: !m.recurringHasEnd,
+                          recurringDay: e.target.value,
                         }))
                       }
-                      className={`px-3 py-1 rounded-lg text-sm font-medium ${
-                        addModal.recurringHasEnd
-                          ? "bg-slate-900 text-white"
-                          : "bg-slate-100 text-slate-700"
-                      }`}
-                      aria-label="Toggle end date"
-                    >
-                      {addModal.recurringHasEnd ? "Enabled" : "Disabled"}
-                    </button>
-                  </div>
-
-                  {addModal.recurringHasEnd && (
-                    <div className="grid grid-cols-2 gap-3">
-                      <Field label="End (Year)">
-                        <select
-                          value={addModal.recurringEndYear}
-                          onChange={(e) =>
-                            setAddModal((m) => ({
-                              ...m,
-                              recurringEndYear: clampInt(
-                                e.target.value,
-                                2000,
-                                2100,
-                              ),
-                            }))
-                          }
-                          className={`mt-1 ${SELECT_UI}`}
-                        >
-                          {years
-                            .slice()
-                            .reverse()
-                            .map((y) => (
-                              <option key={y} value={y}>
-                                {y}
-                              </option>
-                            ))}
-                        </select>
-                      </Field>
-                      <Field label="End (Month)">
-                        <select
-                          value={addModal.recurringEndMonth}
-                          onChange={(e) =>
-                            setAddModal((m) => ({
-                              ...m,
-                              recurringEndMonth: clampInt(
-                                e.target.value,
-                                1,
-                                12,
-                              ),
-                            }))
-                          }
-                          className={`mt-1 ${SELECT_UI}`}
-                        >
-                          {MONTHS.map((mm) => (
-                            <option key={mm.value} value={mm.value}>
-                              {mm.label}
-                            </option>
-                          ))}
-                        </select>
-                      </Field>
-                    </div>
-                  )}
-
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
-                    <p className="text-xs text-amber-800 font-semibold">
-                      Deposit creation mode
-                    </p>
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAddModal((m) => ({
-                            ...m,
-                            recurringMode: "pending",
-                          }))
-                        }
-                        className={`px-3 py-1 rounded-lg text-sm font-medium ${
-                          addModal.recurringMode === "pending"
-                            ? "bg-amber-600 text-white"
-                            : "bg-white border border-amber-200 text-amber-800"
-                        }`}
-                      >
-                        Pending (recommended)
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setAddModal((m) => ({
-                            ...m,
-                            recurringMode: "auto_confirm",
-                          }))
-                        }
-                        className={`px-3 py-1 rounded-lg text-sm font-medium ${
-                          addModal.recurringMode === "auto_confirm"
-                            ? "bg-rose-600 text-white"
-                            : "bg-white border border-rose-200 text-rose-700"
-                        }`}
-                      >
-                        Auto-confirm (assumes deposited)
-                      </button>
-                    </div>
-                    <p className="text-[11px] text-amber-800 mt-2">
-                      Auto-confirm will create completed records automatically.
-                      Use carefully.
-                    </p>
-                  </div>
+                      className={INPUT_CLASS}
+                      placeholder="5"
+                    />
+                  </Field>
                 </div>
               )}
             </div>
@@ -2209,7 +1438,7 @@ export default function SavingsPage() {
             <button
               type="submit"
               disabled={status.busy}
-              className="mt-2 bg-gradient-to-r from-blue-500 to-sky-600 text-white w-full py-2 rounded-lg hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-gradient-to-r from-blue-500 to-sky-600 text-white py-2.5 rounded-xl font-semibold hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {status.busy ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -2237,21 +1466,7 @@ export default function SavingsPage() {
             </div>
           )}
 
-          <div className="flex items-center justify-between mb-3">
-            <div className="text-xs text-slate-600 font-semibold">Mode</div>
-            <Segment
-              value={editModal.simpleMode ? "simple" : "advanced"}
-              onChange={(v) =>
-                setEditModal((m) => ({ ...m, simpleMode: v === "simple" }))
-              }
-              options={[
-                { value: "simple", label: "Simple" },
-                { value: "advanced", label: "Advanced" },
-              ]}
-            />
-          </div>
-
-          <form onSubmit={saveEditAccount} className="space-y-3">
+          <form onSubmit={saveEditAccount} className="space-y-4">
             <Field label="Account Name">
               <input
                 value={editModal.name}
@@ -2262,14 +1477,13 @@ export default function SavingsPage() {
                     error: "",
                   }))
                 }
-                className={`mt-1 ${SELECT_UI}`}
+                className={INPUT_CLASS}
                 maxLength={100}
                 required
-                aria-required="true"
               />
             </Field>
 
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-2 gap-4">
               <Field label="Color">
                 <input
                   type="color"
@@ -2277,35 +1491,31 @@ export default function SavingsPage() {
                   onChange={(e) =>
                     setEditModal((m) => ({ ...m, color: e.target.value }))
                   }
-                  className="mt-1 w-full border rounded-lg px-3 py-2 h-[42px]"
+                  className="w-full border rounded-xl px-3 py-2 h-[42px]"
                 />
               </Field>
 
-              <Field label="Goal (RM)">
+              <Field label="Goal Amount (RM)">
                 <input
                   type="number"
-                  inputMode="decimal"
                   step="0.01"
                   min="0"
-                  max="999999999"
                   value={editModal.goal}
                   onChange={(e) => {
                     if (isValidDecimal(e.target.value)) {
                       setEditModal((m) => ({ ...m, goal: e.target.value }));
                     }
                   }}
-                  className={`mt-1 ${SELECT_UI}`}
+                  className={INPUT_CLASS}
                 />
               </Field>
             </div>
 
-            <Field label="Starting Balance (RM)">
+            <Field label="Current Balance (RM)">
               <input
                 type="number"
-                inputMode="decimal"
                 step="0.01"
                 min="0"
-                max="999999999"
                 value={editModal.startingBalance}
                 onChange={(e) => {
                   if (isValidDecimal(e.target.value)) {
@@ -2315,111 +1525,14 @@ export default function SavingsPage() {
                     }));
                   }
                 }}
-                className={`mt-1 ${SELECT_UI}`}
-              />
-              <p className="text-[11px] text-slate-500 mt-1">
-                Starting balance affects net worth base, not ROI denominator.
-              </p>
-            </Field>
-
-            {!editModal.simpleMode && (
-              <>
-                <div className="grid grid-cols-2 gap-3">
-                  <Field label="Expected Rate (% p.a.)">
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      step="0.01"
-                      min="0"
-                      max="100"
-                      value={editModal.ratePercent}
-                      onChange={(e) => {
-                        if (isValidDecimal(e.target.value)) {
-                          setEditModal((m) => ({
-                            ...m,
-                            ratePercent: e.target.value,
-                          }));
-                        }
-                      }}
-                      className={`mt-1 ${SELECT_UI}`}
-                    />
-                  </Field>
-
-                  <Field label="Return Frequency">
-                    <select
-                      value={editModal.returnFrequency}
-                      onChange={(e) =>
-                        setEditModal((m) => ({
-                          ...m,
-                          returnFrequency: e.target.value,
-                        }))
-                      }
-                      className={`mt-1 ${SELECT_UI}`}
-                    >
-                      {RETURN_FREQ.map((f) => (
-                        <option key={f.value} value={f.value}>
-                          {f.label}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                </div>
-              </>
-            )}
-
-            <Field label="Monthly Contribution Plan (RM) • Projection only">
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                min="0"
-                max="999999999"
-                value={editModal.monthlyContribution}
-                onChange={(e) => {
-                  if (isValidDecimal(e.target.value)) {
-                    setEditModal((m) => ({
-                      ...m,
-                      monthlyContribution: e.target.value,
-                    }));
-                  }
-                }}
-                className={`mt-1 ${SELECT_UI}`}
+                className={INPUT_CLASS}
               />
             </Field>
-
-            <div className="flex items-center justify-between rounded-xl border bg-slate-50 px-3 py-2">
-              <div className="flex items-center gap-2 text-slate-700">
-                <Repeat className="w-4 h-4" />
-                Auto Deposit Reminder
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setEditModal((m) => ({
-                    ...m,
-                    autoDepositReminder: !m.autoDepositReminder,
-                  }))
-                }
-                className={`px-3 py-1 rounded-lg text-sm font-medium ${
-                  editModal.autoDepositReminder
-                    ? "bg-emerald-100 text-emerald-700"
-                    : "bg-gray-100 text-gray-600"
-                }`}
-                aria-label="Toggle auto deposit reminder"
-              >
-                {editModal.autoDepositReminder ? "ON" : "OFF"}
-              </button>
-            </div>
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs text-slate-700">
-              Tip: Edit recurring rule on the account card using{" "}
-              <b>"Recurring Rule"</b>.
-            </div>
 
             <button
               type="submit"
               disabled={status.busy}
-              className="mt-2 bg-gradient-to-r from-blue-500 to-sky-600 text-white w-full py-2 rounded-lg hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-gradient-to-r from-blue-500 to-sky-600 text-white py-2.5 rounded-xl font-semibold hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {status.busy ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -2432,16 +1545,10 @@ export default function SavingsPage() {
         </Modal>
       )}
 
-      {/* Transaction Modal (Capital / Dividend / Withdrawal) */}
+      {/* Transaction Modal */}
       {txnModal.open && (
         <Modal
-          title={
-            txnModal.type === "capital_add"
-              ? `Add Capital • ${txnModal.accountName}`
-              : txnModal.type === "dividend"
-                ? `Add Dividend/Interest • ${txnModal.accountName}`
-                : `Withdraw • ${txnModal.accountName}`
-          }
+          title={`${txTypeLabel(txnModal.type)} • ${txnModal.accountName}`}
           onClose={() => setTxnModal((m) => ({ ...m, open: false }))}
         >
           {txnModal.error && (
@@ -2453,225 +1560,18 @@ export default function SavingsPage() {
             </div>
           )}
 
-          <form onSubmit={saveTxn} className="space-y-3">
-            <div className="rounded-xl border bg-slate-50 px-3 py-3">
-              <p className="text-xs text-slate-600 font-semibold flex items-center gap-2">
-                <Calendar className="w-4 h-4" /> Month-based entry (recommended)
-              </p>
-              <div className="mt-2 grid grid-cols-2 gap-3">
-                <Field label="Year">
-                  <select
-                    value={txnModal.year}
-                    onChange={(e) =>
-                      setTxnModal((m) => ({
-                        ...m,
-                        year: clampInt(e.target.value, 2000, 2100),
-                      }))
-                    }
-                    className={`mt-1 ${SELECT_UI}`}
-                    required
-                  >
-                    {years
-                      .slice()
-                      .reverse()
-                      .map((y) => (
-                        <option key={y} value={y}>
-                          {y}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
-                <Field label="Month">
-                  <select
-                    value={txnModal.month}
-                    onChange={(e) =>
-                      setTxnModal((m) => ({
-                        ...m,
-                        month: clampInt(e.target.value, 1, 12),
-                      }))
-                    }
-                    className={`mt-1 ${SELECT_UI}`}
-                    required
-                  >
-                    {MONTHS.map((mm) => (
-                      <option key={mm.value} value={mm.value}>
-                        {mm.label}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
-
-              <Field label="Day (optional)">
-                <input
-                  type="number"
-                  min="1"
-                  max="31"
-                  value={txnModal.day}
-                  onChange={(e) =>
-                    setTxnModal((m) => ({
-                      ...m,
-                      day: e.target.value,
-                      error: "",
-                    }))
-                  }
-                  className={`mt-1 ${SELECT_UI}`}
-                  placeholder="Leave blank to default to day 1"
-                />
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Optional. Use if you want more precision, but month/year is
-                  the main tracking.
-                </p>
-              </Field>
-            </div>
-
-            <Field label="Amount (RM)">
-              <input
-                type="number"
-                inputMode="decimal"
-                step="0.01"
-                min="0.01"
-                max="999999999"
-                value={txnModal.amount}
-                onChange={(e) => {
-                  if (isValidDecimal(e.target.value)) {
-                    setTxnModal((m) => ({
-                      ...m,
-                      amount: e.target.value,
-                      error: "",
-                    }));
-                  }
-                }}
-                onBlur={(e) => {
-                  const num = parseFloat(e.target.value);
-                  if (!isNaN(num) && num > 0) {
-                    setTxnModal((m) => ({ ...m, amount: num.toFixed(2) }));
-                  }
-                }}
-                className={`mt-1 ${SELECT_UI}`}
-                placeholder="200.00"
-                required
-                aria-required="true"
-              />
-            </Field>
-
-            <Field label="Notes (optional)">
-              <input
-                value={txnModal.note}
-                onChange={(e) =>
-                  setTxnModal((m) => ({ ...m, note: e.target.value }))
-                }
-                className={`mt-1 ${SELECT_UI}`}
-                placeholder="e.g., January top-up / ASB dividend 2025"
-                maxLength={500}
-              />
-            </Field>
-
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-              <b>Actual history:</b> this record will be saved as{" "}
-              <b>completed</b>. Projections are separate and never auto-add to
-              balances.
-            </div>
-
-            <button
-              type="submit"
-              disabled={status.busy}
-              className={`mt-2 w-full py-2 rounded-lg text-white hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
-                txnModal.type === "capital_add"
-                  ? "bg-gradient-to-r from-blue-500 to-sky-600"
-                  : txnModal.type === "dividend"
-                    ? "bg-gradient-to-r from-emerald-500 to-teal-600"
-                    : "bg-gradient-to-r from-rose-500 to-red-600"
-              }`}
-            >
-              {status.busy ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
-              ) : txnModal.type === "capital_add" ? (
-                <ArrowUpCircle className="w-4 h-4" />
-              ) : txnModal.type === "dividend" ? (
-                <Trophy className="w-4 h-4" />
-              ) : (
-                <MinusCircle className="w-4 h-4" />
-              )}
-              Save
-            </button>
-          </form>
-        </Modal>
-      )}
-
-      {/* Recurring Rule Modal */}
-      {ruleModal.open && (
-        <Modal
-          title={`${ruleModal.mode === "edit" ? "Edit" : "Create"} Recurring Rule • ${ruleModal.accountName}`}
-          onClose={() => setRuleModal((m) => ({ ...m, open: false }))}
-        >
-          {ruleModal.error && (
-            <div
-              className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 mb-3"
-              role="alert"
-            >
-              {ruleModal.error}
-            </div>
-          )}
-
-          <form onSubmit={saveRule} className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Amount (RM/month)">
-                <input
-                  type="number"
-                  inputMode="decimal"
-                  step="0.01"
-                  min="0.01"
-                  max="999999999"
-                  value={ruleModal.amount}
-                  onChange={(e) => {
-                    if (isValidDecimal(e.target.value)) {
-                      setRuleModal((m) => ({
-                        ...m,
-                        amount: e.target.value,
-                        error: "",
-                      }));
-                    }
-                  }}
-                  onBlur={(e) => {
-                    const num = parseFloat(e.target.value);
-                    if (!isNaN(num) && num > 0) {
-                      setRuleModal((m) => ({ ...m, amount: num.toFixed(2) }));
-                    }
-                  }}
-                  className={`mt-1 ${SELECT_UI}`}
-                  placeholder="100.00"
-                  required
-                  aria-required="true"
-                />
-              </Field>
-              <Field label="Day of Month (1-28)">
-                <input
-                  type="number"
-                  min="1"
-                  max="28"
-                  value={ruleModal.dayOfMonth}
-                  onChange={(e) =>
-                    setRuleModal((m) => ({ ...m, dayOfMonth: e.target.value }))
-                  }
-                  className={`mt-1 ${SELECT_UI}`}
-                  placeholder="5"
-                  required
-                />
-              </Field>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Start (Year)">
+          <form onSubmit={saveTxn} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Year">
                 <select
-                  value={ruleModal.startYear}
+                  value={txnModal.year}
                   onChange={(e) =>
-                    setRuleModal((m) => ({
+                    setTxnModal((m) => ({
                       ...m,
-                      startYear: clampInt(e.target.value, 2000, 2100),
+                      year: clampInt(e.target.value, 2000, 2100),
                     }))
                   }
-                  className={`mt-1 ${SELECT_UI}`}
+                  className={INPUT_CLASS}
                   required
                 >
                   {years
@@ -2684,16 +1584,16 @@ export default function SavingsPage() {
                     ))}
                 </select>
               </Field>
-              <Field label="Start (Month)">
+              <Field label="Month">
                 <select
-                  value={ruleModal.startMonth}
+                  value={txnModal.month}
                   onChange={(e) =>
-                    setRuleModal((m) => ({
+                    setTxnModal((m) => ({
                       ...m,
-                      startMonth: clampInt(e.target.value, 1, 12),
+                      month: clampInt(e.target.value, 1, 12),
                     }))
                   }
-                  className={`mt-1 ${SELECT_UI}`}
+                  className={INPUT_CLASS}
                   required
                 >
                   {MONTHS.map((mm) => (
@@ -2705,113 +1605,122 @@ export default function SavingsPage() {
               </Field>
             </div>
 
-            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="text-sm text-slate-700 font-medium">
-                End month (optional)
-              </div>
-              <button
-                type="button"
-                onClick={() =>
-                  setRuleModal((m) => ({ ...m, hasEnd: !m.hasEnd }))
+            <Field label="Amount (RM)">
+              <input
+                type="number"
+                step="0.01"
+                min="0.01"
+                value={txnModal.amount}
+                onChange={(e) => {
+                  if (isValidDecimal(e.target.value)) {
+                    setTxnModal((m) => ({
+                      ...m,
+                      amount: e.target.value,
+                      error: "",
+                    }))
+                  }
+                }}
+                className={INPUT_CLASS}
+                placeholder="200.00"
+                required
+              />
+            </Field>
+
+            <Field label="Notes (optional)">
+              <input
+                value={txnModal.note}
+                onChange={(e) =>
+                  setTxnModal((m) => ({ ...m, note: e.target.value }))
                 }
-                className={`px-3 py-1 rounded-lg text-sm font-medium ${ruleModal.hasEnd ? "bg-slate-900 text-white" : "bg-white border border-slate-200 text-slate-700"}`}
-                aria-label="Toggle end date"
-              >
-                {ruleModal.hasEnd ? "Enabled" : "Disabled"}
-              </button>
-            </div>
+                className={INPUT_CLASS}
+                placeholder="e.g., Monthly savings"
+                maxLength={500}
+              />
+            </Field>
 
-            {ruleModal.hasEnd && (
-              <div className="grid grid-cols-2 gap-3">
-                <Field label="End (Year)">
-                  <select
-                    value={ruleModal.endYear}
-                    onChange={(e) =>
+            <button
+              type="submit"
+              disabled={status.busy}
+              className={`w-full py-2.5 rounded-xl font-semibold text-white hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50 ${
+                txnModal.type === "capital_add"
+                  ? "bg-gradient-to-r from-blue-500 to-sky-600"
+                  : txnModal.type === "dividend"
+                    ? "bg-gradient-to-r from-emerald-500 to-teal-600"
+                    : "bg-gradient-to-r from-rose-500 to-red-600"
+              }`}
+            >
+              {status.busy ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4" />
+              )}
+              Save Transaction
+            </button>
+          </form>
+        </Modal>
+      )}
+
+      {/* Recurring Rule Modal */}
+      {ruleModal.open && (
+        <Modal
+          title={`${ruleModal.mode === "edit" ? "Edit" : "Create"} Reminder • ${ruleModal.accountName}`}
+          onClose={() => setRuleModal((m) => ({ ...m, open: false }))}
+        >
+          {ruleModal.error && (
+            <div
+              className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 mb-3"
+              role="alert"
+            >
+              {ruleModal.error}
+            </div>
+          )}
+
+          <form onSubmit={saveRule} className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="Amount (RM/month)">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  value={ruleModal.amount}
+                  onChange={(e) => {
+                    if (isValidDecimal(e.target.value)) {
                       setRuleModal((m) => ({
                         ...m,
-                        endYear: clampInt(e.target.value, 2000, 2100),
-                      }))
+                        amount: e.target.value,
+                        error: "",
+                      }));
                     }
-                    className={`mt-1 ${SELECT_UI}`}
-                  >
-                    {years
-                      .slice()
-                      .reverse()
-                      .map((y) => (
-                        <option key={y} value={y}>
-                          {y}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
-                <Field label="End (Month)">
-                  <select
-                    value={ruleModal.endMonth}
-                    onChange={(e) =>
-                      setRuleModal((m) => ({
-                        ...m,
-                        endMonth: clampInt(e.target.value, 1, 12),
-                      }))
-                    }
-                    className={`mt-1 ${SELECT_UI}`}
-                  >
-                    {MONTHS.map((mm) => (
-                      <option key={mm.value} value={mm.value}>
-                        {mm.label}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
-            )}
-
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
-              <p className="text-xs text-amber-800 font-semibold">
-                Deposit creation mode
-              </p>
-              <div className="mt-2 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    setRuleModal((m) => ({ ...m, modeSetting: "pending" }))
+                  }}
+                  className={INPUT_CLASS}
+                  placeholder="100.00"
+                  required
+                />
+              </Field>
+              <Field label="Day of Month (1-28)">
+                <input
+                  type="number"
+                  min="1"
+                  max="28"
+                  value={ruleModal.dayOfMonth}
+                  onChange={(e) =>
+                    setRuleModal((m) => ({ ...m, dayOfMonth: e.target.value }))
                   }
-                  className={`px-3 py-1 rounded-lg text-sm font-medium ${
-                    ruleModal.modeSetting === "pending"
-                      ? "bg-amber-600 text-white"
-                      : "bg-white border border-amber-200 text-amber-800"
-                  }`}
-                >
-                  Pending (recommended)
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setRuleModal((m) => ({ ...m, modeSetting: "auto_confirm" }))
-                  }
-                  className={`px-3 py-1 rounded-lg text-sm font-medium ${
-                    ruleModal.modeSetting === "auto_confirm"
-                      ? "bg-rose-600 text-white"
-                      : "bg-white border border-rose-200 text-rose-700"
-                  }`}
-                >
-                  Auto-confirm
-                </button>
-              </div>
-              <p className="text-[11px] text-amber-800 mt-2">
-                Auto-confirm creates completed records automatically. This
-                assumes you deposited.
-              </p>
+                  className={INPUT_CLASS}
+                  placeholder="5"
+                  required
+                />
+              </Field>
             </div>
 
-            <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-              <div className="text-sm text-slate-700 font-medium">Active</div>
+            <div className="flex items-center justify-between rounded-xl border bg-slate-50 px-4 py-3">
+              <span className="text-sm font-medium text-slate-700">Active</span>
               <button
                 type="button"
                 onClick={() =>
                   setRuleModal((m) => ({ ...m, isActive: !m.isActive }))
                 }
-                className={`px-3 py-1 rounded-lg text-sm font-medium ${ruleModal.isActive ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600"}`}
-                aria-label="Toggle rule active status"
+                className={`px-3 py-1 rounded-lg text-sm font-medium ${ruleModal.isActive ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}
               >
                 {ruleModal.isActive ? "ON" : "OFF"}
               </button>
@@ -2820,14 +1729,14 @@ export default function SavingsPage() {
             <button
               type="submit"
               disabled={status.busy}
-              className="mt-2 bg-gradient-to-r from-indigo-500 to-sky-600 text-white w-full py-2 rounded-lg hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-gradient-to-r from-indigo-500 to-purple-600 text-white py-2.5 rounded-xl font-semibold hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {status.busy ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (
                 <Repeat className="w-4 h-4" />
               )}
-              Save Rule
+              Save Reminder
             </button>
           </form>
         </Modal>
@@ -2850,12 +1759,13 @@ export default function SavingsPage() {
             </div>
           )}
 
-          <p className="text-sm text-slate-700">
-            Are you sure you want to delete <b>{deleteModal.name}</b>? <br />
-            This will remove the account and its transactions.
+          <p className="text-sm text-slate-700 mb-6">
+            Are you sure you want to delete <b>{deleteModal.name}</b>?
+            <br />
+            This will permanently remove the account and all its transactions.
           </p>
 
-          <div className="mt-4 flex items-center justify-end gap-2">
+          <div className="flex items-center justify-end gap-2">
             <button
               type="button"
               onClick={() =>
@@ -2869,7 +1779,7 @@ export default function SavingsPage() {
               type="button"
               onClick={confirmDelete}
               disabled={status.busy}
-              className="px-4 py-2 rounded-xl bg-rose-600 text-white hover:bg-rose-700 transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="px-4 py-2 rounded-xl bg-rose-600 text-white hover:bg-rose-700 transition flex items-center gap-2 disabled:opacity-50"
             >
               {status.busy ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -2885,7 +1795,7 @@ export default function SavingsPage() {
       {/* Export Modal */}
       {exportModal.open && (
         <Modal
-          title="Export CSV"
+          title="Export Data"
           onClose={() =>
             setExportModal((m) => ({
               ...m,
@@ -2904,23 +1814,23 @@ export default function SavingsPage() {
             </div>
           )}
 
-          <form onSubmit={runExport} className="space-y-3">
+          <form onSubmit={runExport} className="space-y-4">
             <Field label="Export Type">
               <select
                 value={exportModal.exportType}
                 onChange={(e) =>
                   setExportModal((m) => ({ ...m, exportType: e.target.value }))
                 }
-                className={`mt-1 ${SELECT_UI}`}
+                className={INPUT_CLASS}
               >
-                <option value="transactions">Transactions CSV (default)</option>
-                <option value="accounts">Account Summary CSV</option>
-                <option value="yearly">Yearly Summary CSV</option>
+                <option value="transactions">Transactions</option>
+                <option value="accounts">Account Summary</option>
+                <option value="yearly">Yearly Summary</option>
               </select>
             </Field>
 
             {exportModal.exportType !== "accounts" && (
-              <Field label="Year (optional)">
+              <Field label="Year">
                 <select
                   value={exportModal.year}
                   onChange={(e) =>
@@ -2929,7 +1839,7 @@ export default function SavingsPage() {
                       year: clampInt(e.target.value, 2000, 2100),
                     }))
                   }
-                  className={`mt-1 ${SELECT_UI}`}
+                  className={INPUT_CLASS}
                 >
                   {years
                     .slice()
@@ -2943,13 +1853,13 @@ export default function SavingsPage() {
               </Field>
             )}
 
-            <Field label="Account (optional)">
+            <Field label="Account">
               <select
                 value={exportModal.accountId}
                 onChange={(e) =>
                   setExportModal((m) => ({ ...m, accountId: e.target.value }))
                 }
-                className={`mt-1 ${SELECT_UI}`}
+                className={INPUT_CLASS}
               >
                 <option value="all">All accounts</option>
                 {accounts.map((a) => (
@@ -2960,15 +1870,10 @@ export default function SavingsPage() {
               </select>
             </Field>
 
-            <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600">
-              Export only includes <b>actual</b> data. Pending transactions are
-              included and marked. Projections are not exported.
-            </div>
-
             <button
               type="submit"
               disabled={exportModal.busy}
-              className="mt-2 bg-gradient-to-r from-slate-900 to-slate-700 text-white w-full py-2 rounded-lg hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full bg-gradient-to-r from-slate-900 to-slate-700 text-white py-2.5 rounded-xl font-semibold hover:opacity-90 transition flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {exportModal.busy ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
@@ -2985,8 +1890,19 @@ export default function SavingsPage() {
 }
 
 /* -------------------------------------------------------------------------- */
-/*                          ⭐ NEW WIDGET COMPONENTS                          */
+/*                             WIDGET COMPONENTS                              */
 /* -------------------------------------------------------------------------- */
+
+const QuickStatCard = ({ icon, label, value, subtitle }) => (
+  <div className="bg-white/90 backdrop-blur-lg rounded-2xl p-5 border border-slate-100 shadow-sm hover:shadow-md transition">
+    <div className="flex items-start justify-between mb-2">
+      <div className="p-2 bg-sky-50 rounded-xl">{icon}</div>
+    </div>
+    <p className="text-xs text-slate-500">{label}</p>
+    <h3 className="text-2xl font-bold text-slate-900 mt-1">{value}</h3>
+    {subtitle && <p className="text-xs text-slate-500 mt-1">{subtitle}</p>}
+  </div>
+);
 
 const SmartAlertsWidget = ({ alerts }) => {
   if (alerts.length === 0) return null;
@@ -2998,8 +1914,8 @@ const SmartAlertsWidget = ({ alerts }) => {
           <AlertTriangle className="w-5 h-5 text-amber-700" />
         </div>
         <div>
-          <h3 className="text-lg font-bold text-slate-900">🚨 Smart Alerts</h3>
-          <p className="text-sm text-slate-600">Insights & reminders</p>
+          <h3 className="text-lg font-bold text-slate-900">Smart Alerts</h3>
+          <p className="text-sm text-slate-600">Important insights</p>
         </div>
       </div>
 
@@ -3025,8 +1941,7 @@ const SmartAlertsWidget = ({ alerts }) => {
                   <Flame className="w-5 h-5 text-emerald-600" />
                 )}
               </div>
-
-              <div className="flex-1 min-w-0">
+              <div className="flex-1">
                 <p className="text-sm font-semibold text-slate-900">
                   {alert.title}
                 </p>
@@ -3053,14 +1968,13 @@ const MonthComparisonWidget = ({ stats }) => {
         </div>
         <div>
           <h3 className="text-lg font-bold text-slate-900">
-            📊 This Month vs Last Month
+            This Month vs Last Month
           </h3>
           <p className="text-sm text-slate-600">Performance comparison</p>
         </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Capital Deposits */}
         <div className="bg-white rounded-xl p-4 border border-sky-100">
           <p className="text-xs text-slate-600 mb-2">Deposits</p>
           <div className="flex items-baseline gap-2">
@@ -3089,9 +2003,8 @@ const MonthComparisonWidget = ({ stats }) => {
           </p>
         </div>
 
-        {/* Dividends */}
         <div className="bg-white rounded-xl p-4 border border-sky-100">
-          <p className="text-xs text-slate-600 mb-2">Dividends</p>
+          <p className="text-xs text-slate-600 mb-2">Interest</p>
           <div className="flex items-baseline gap-2">
             <p className="text-xl font-bold text-emerald-700">
               {formatRM(currentMonth.dividends)}
@@ -3118,9 +2031,8 @@ const MonthComparisonWidget = ({ stats }) => {
           </p>
         </div>
 
-        {/* Streak */}
         <div className="bg-white rounded-xl p-4 border border-sky-100">
-          <p className="text-xs text-slate-600 mb-2">Deposit Streak</p>
+          <p className="text-xs text-slate-600 mb-2">Streak</p>
           <div className="flex items-baseline gap-2">
             <p className="text-xl font-bold text-indigo-700">
               {streak.current}
@@ -3128,20 +2040,19 @@ const MonthComparisonWidget = ({ stats }) => {
             <p className="text-xs text-slate-500">months</p>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            Record: {streak.longest} months
+            Record: {streak.longest}
           </p>
         </div>
 
-        {/* Consistency */}
         <div className="bg-white rounded-xl p-4 border border-sky-100">
-          <p className="text-xs text-slate-600 mb-2">6M Consistency</p>
+          <p className="text-xs text-slate-600 mb-2">Consistency</p>
           <div className="flex items-baseline gap-2">
             <p className="text-xl font-bold text-violet-700">
               {consistency.score}%
             </p>
           </div>
           <p className="text-xs text-slate-500 mt-1">
-            {consistency.monthsWithDeposits} of 6 months
+            {consistency.monthsWithDeposits}/6 months
           </p>
         </div>
       </div>
@@ -3181,237 +2092,139 @@ const PendingDepositsWidget = ({
     setSelectedIds([]);
   };
 
+  if (loading) {
+    return (
+      <div className="bg-white/85 backdrop-blur-lg rounded-2xl border border-slate-100 shadow-sm p-5">
+        <div className="flex items-center gap-2 text-slate-600">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Loading pending deposits...
+        </div>
+      </div>
+    );
+  }
+
+  if (pendingTx.length === 0) return null;
+
   return (
     <div className="bg-white/85 backdrop-blur-lg rounded-2xl border border-slate-100 shadow-sm p-5">
       <div className="flex items-start justify-between gap-3 mb-4">
         <div>
           <h3 className="text-base font-semibold text-[#0b1222] flex items-center gap-2">
-            <Repeat className="w-5 h-5 text-indigo-600" /> Pending Recurring
-            Deposits
+            <Repeat className="w-5 h-5 text-indigo-600" /> Pending Deposits
           </h3>
           <p className="text-xs text-slate-500 mt-1">
-            Recurring reminders create <b>pending</b> records. Confirm only if
-            you really deposited.
+            Confirm deposits you've actually made
           </p>
         </div>
         <div className="text-xs text-slate-500">
-          Scope:{" "}
           {filter.viewMode === "month"
             ? yyyymmToLabel(filter.year, filter.month || nowYM.month)
             : `Year ${filter.year}`}
         </div>
       </div>
 
-      {loading ? (
-        <div className="flex items-center gap-2 text-slate-600 text-sm">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Loading...
+      {selectedIds.length > 0 && (
+        <div className="mb-4 rounded-xl border-2 border-emerald-200 bg-emerald-50 p-3 flex items-center justify-between">
+          <p className="text-sm font-semibold text-emerald-800">
+            {selectedIds.length} selected
+          </p>
+          <button
+            onClick={handleBulkConfirm}
+            disabled={busy}
+            className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-lg text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
+            type="button"
+          >
+            <CheckCircle2 className="w-4 h-4" />
+            Confirm All
+          </button>
         </div>
-      ) : pendingTx.length === 0 ? (
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-slate-700 text-sm">
-          No pending recurring deposits in this view.
-        </div>
-      ) : (
-        <>
-          {/* Bulk Actions Bar */}
-          {selectedIds.length > 0 && (
-            <div className="mb-4 rounded-xl border-2 border-emerald-200 bg-emerald-50 p-3 flex items-center justify-between">
-              <p className="text-sm font-semibold text-emerald-800">
-                {selectedIds.length} selected
-              </p>
-              <button
-                onClick={handleBulkConfirm}
-                disabled={busy}
-                className="flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-lg text-sm font-semibold hover:opacity-90 transition disabled:opacity-50"
-                type="button"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                Confirm All Selected
-              </button>
-            </div>
-          )}
+      )}
 
-          {/* Select All */}
-          <div className="mb-3">
+      <div className="mb-3">
+        <button
+          onClick={selectAll}
+          className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold"
+          type="button"
+        >
+          {selectedIds.length === pendingTx.length
+            ? "Deselect All"
+            : "Select All"}
+        </button>
+      </div>
+
+      <div className="space-y-2">
+        {pendingTx.slice(0, 12).map((t) => (
+          <div
+            key={t._id}
+            className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3"
+          >
+            <input
+              type="checkbox"
+              checked={selectedIds.includes(t._id)}
+              onChange={() => toggleSelect(t._id)}
+              className="w-4 h-4 rounded border-slate-300 text-indigo-600"
+            />
+
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-slate-900 truncate">
+                {t.accountName ||
+                  accounts.find((a) => a._id === t.accountId)?.name ||
+                  "Account"}
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                {yyyymmToLabel(t.year, t.month)} • {formatRM(t.amount)}
+              </p>
+            </div>
+
             <button
-              onClick={selectAll}
-              className="text-xs text-indigo-600 hover:text-indigo-700 font-semibold"
               type="button"
+              disabled={busy}
+              onClick={() => onConfirmSingle(t)}
+              className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition flex items-center gap-2 disabled:opacity-50"
             >
-              {selectedIds.length === pendingTx.length
-                ? "Deselect All"
-                : "Select All"}
+              {busy ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4" />
+              )}
+              Confirm
             </button>
           </div>
+        ))}
 
-          {/* Pending List */}
-          <div className="space-y-2">
-            {pendingTx.slice(0, 12).map((t) => (
-              <div
-                key={t._id}
-                className="rounded-xl border border-slate-200 bg-white p-3 flex items-center gap-3"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedIds.includes(t._id)}
-                  onChange={() => toggleSelect(t._id)}
-                  className="w-4 h-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
-                />
-
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-slate-900 truncate">
-                    {t.accountName ||
-                      accounts.find((a) => a._id === t.accountId)?.name ||
-                      "Account"}{" "}
-                    •{" "}
-                    <span className="text-slate-600 font-medium">
-                      {txTypeLabel(t.type)}
-                    </span>
-                  </p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {yyyymmToLabel(t.year, t.month)} • Amount:{" "}
-                    <b>{formatRM(t.amount)}</b>{" "}
-                    {t.source === "recurring" ? "• Recurring" : ""}{" "}
-                    {t.notes ? `• ${t.notes}` : ""}
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <span
-                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${statusBadge(t.status).cls}`}
-                  >
-                    {statusBadge(t.status).text}
-                  </span>
-                  <span
-                    className={`px-2 py-1 rounded-lg text-[11px] font-semibold ${sourceBadge(t.source).cls}`}
-                  >
-                    {sourceBadge(t.source).text}
-                  </span>
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={() => onConfirmSingle(t)}
-                    className="px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Confirm (mark completed)"
-                    aria-label="Confirm transaction"
-                  >
-                    {busy ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <CheckCircle2 className="w-4 h-4" />
-                    )}
-                    Confirm
-                  </button>
-                </div>
-              </div>
-            ))}
-
-            {pendingTx.length > 12 && (
-              <p className="text-xs text-slate-500 mt-2">
-                Showing first 12 pending items. Use filter to narrow down.
-              </p>
-            )}
-          </div>
-        </>
-      )}
+        {pendingTx.length > 12 && (
+          <p className="text-xs text-slate-500 mt-2">
+            Showing first 12. Use filters to narrow down.
+          </p>
+        )}
+      </div>
     </div>
   );
 };
 
-/* -------------------------------------------------------------------------- */
-/*                          EXISTING WIDGET COMPONENTS                        */
-/* -------------------------------------------------------------------------- */
-
-const SummaryCard = ({ label, color, value, sub }) => (
-  <div className="bg-white/80 backdrop-blur-lg rounded-2xl p-5 sm:p-6 border border-gray-100 shadow-sm hover:shadow-md transition">
-    <p className="text-gray-500 text-xs sm:text-sm">{label}</p>
-    <h2 className={`text-xl sm:text-2xl font-semibold ${color}`}>{value}</h2>
-    {sub && <p className="text-[11px] text-slate-500 mt-1">{sub}</p>}
-  </div>
-);
-
-const MiniStat = ({ label, value, icon }) => (
-  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 flex items-center gap-2">
-    <div className="p-2 rounded-lg bg-white border border-slate-200">
-      {icon}
-    </div>
-    <div className="min-w-0">
-      <p className="text-[11px] text-slate-500 truncate">{label}</p>
-      <p className="text-xs font-semibold text-slate-800 truncate">{value}</p>
-    </div>
-  </div>
-);
-
-const Segment = ({ value, onChange, options }) => (
-  <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
-    {options.map((o) => (
-      <button
-        key={o.value}
-        type="button"
-        onClick={() => onChange(o.value)}
-        className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition ${
-          value === o.value
-            ? "bg-slate-900 text-white"
-            : "text-slate-700 hover:bg-slate-50"
-        }`}
-      >
-        {o.label}
-      </button>
-    ))}
-  </div>
-);
-
 const SavingsCard = ({
   acc,
   rule,
-  scopedAgg,
+  busy,
   onEdit,
   onDelete,
-  onAddCapital,
-  onAddDividend,
+  onAddDeposit,
+  onAddInterest,
   onWithdraw,
   onEditRule,
-  busy,
 }) => {
-  const goal = safeNumber(acc.goal, 0);
-
-  const currentBalance = safeNumber(acc.currentBalance, 0);
-  const totalContributed = safeNumber(acc.totalContributed, 0);
-  const totalDiv = safeNumber(acc.totalDividendsReceived, 0);
-  const totalWithdrawn = safeNumber(acc.totalWithdrawn, 0);
-
-  const roiLifetime =
-    totalContributed > 0 ? (totalDiv / totalContributed) * 100 : 0;
-
-  const scopeCap = safeNumber(scopedAgg?.capitalAdded, 0);
-  const scopeDiv = safeNumber(scopedAgg?.dividends, 0);
-  const scopeW = safeNumber(scopedAgg?.withdrawals, 0);
-  const roiScope = scopeCap > 0 ? (scopeDiv / scopeCap) * 100 : 0;
-
-  const rate = safeNumber(acc.ratePercent, 0);
-  const freq = acc.returnFrequency || "daily_working";
-  const est = estimateReturn(currentBalance, rate, freq, WORKING_DAYS_PER_YEAR);
-  const estLabel =
-    freq === "daily_working"
-      ? "≈ per working day"
-      : freq === "daily_calendar"
-        ? "≈ per day"
-        : freq === "weekly"
-          ? "≈ per week"
-          : freq === "monthly"
-            ? "≈ per month"
-            : "≈ per year";
-
-  const progress = goal > 0 ? Math.min((currentBalance / goal) * 100, 100) : 0;
+  const balance = safeNumber(acc.currentBalance);
+  const goal = safeNumber(acc.goal);
+  const progress = goal > 0 ? Math.min((balance / goal) * 100, 100) : 0;
 
   const ruleText = rule?.isActive
-    ? `Auto plan: RM${safeNumber(rule.amount, 0).toFixed(0)} on day ${clampInt(rule.dayOfMonth || 5, 1, 28)}`
-    : "Auto plan: OFF";
+    ? `RM${safeNumber(rule.amount, 0).toFixed(0)} on day ${clampInt(rule.dayOfMonth || 5, 1, 28)}`
+    : "No reminder set";
 
   return (
-    <div className="bg-white/95 backdrop-blur-md rounded-2xl border border-gray-100 shadow-md p-5 sm:p-6 hover:shadow-lg transition">
+    <div className="bg-white/95 backdrop-blur-md rounded-2xl border border-slate-100 shadow-md p-5 sm:p-6 hover:shadow-lg transition">
       {/* Header */}
-      <div className="flex justify-between items-start mb-3 gap-3">
+      <div className="flex justify-between items-start mb-4 gap-3">
         <div className="flex items-center gap-3 min-w-0">
           <div
             className="p-2 rounded-lg shrink-0"
@@ -3427,9 +2240,7 @@ const SavingsCard = ({
             <h3 className="text-lg font-semibold text-[#0b1222] truncate">
               {acc.name}
             </h3>
-            <p className="text-[11px] text-slate-500 truncate">
-              {ruleText} • <span className="font-semibold">Reminder only</span>
-            </p>
+            <p className="text-xs text-slate-500 truncate">{ruleText}</p>
           </div>
         </div>
 
@@ -3438,9 +2249,7 @@ const SavingsCard = ({
             type="button"
             onClick={onEditRule}
             className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition"
-            title="Recurring Rule"
             disabled={busy}
-            aria-label="Edit recurring rule"
           >
             <Repeat className="w-4 h-4 text-slate-700" />
           </button>
@@ -3448,9 +2257,7 @@ const SavingsCard = ({
             type="button"
             onClick={onEdit}
             className="p-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 transition"
-            title="Edit account"
             disabled={busy}
-            aria-label="Edit account"
           >
             <Pencil className="w-4 h-4 text-slate-700" />
           </button>
@@ -3458,174 +2265,92 @@ const SavingsCard = ({
             type="button"
             onClick={onDelete}
             className="p-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 transition"
-            title="Delete account"
             disabled={busy}
-            aria-label="Delete account"
           >
             <Trash2 className="w-4 h-4 text-rose-600" />
           </button>
         </div>
       </div>
 
-      {/* Key values */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="text-[11px] text-slate-500">Current Balance</p>
-          <p className="text-sm font-semibold text-slate-900">
-            {formatRM(currentBalance)}
-          </p>
-          <p className="text-[10px] text-slate-500 mt-1">
-            Used for allocation / net worth
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="text-[11px] text-slate-500">
-            Total Contributed (lifetime)
-          </p>
-          <p className="text-sm font-semibold text-slate-900">
-            {formatRM(totalContributed)}
-          </p>
-          <p className="text-[10px] text-slate-500 mt-1">ROI denominator</p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="text-[11px] text-slate-500">
-            Total Dividends/Interest (lifetime)
-          </p>
-          <p className="text-sm font-semibold text-emerald-700">
-            {formatRM(totalDiv)}
-          </p>
-          <p className="text-[10px] text-slate-500 mt-1">Actual received</p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-          <p className="text-[11px] text-slate-500">
-            Total Withdrawn (lifetime)
-          </p>
-          <p className="text-sm font-semibold text-rose-700">
-            {formatRM(totalWithdrawn)}
-          </p>
-          <p className="text-[10px] text-slate-500 mt-1">Outflows tracked</p>
-        </div>
+      {/* Balance */}
+      <div className="mb-4">
+        <p className="text-xs text-slate-500">Current Balance</p>
+        <p className="text-3xl font-bold text-slate-900">{formatRM(balance)}</p>
       </div>
 
-      {/* ROI + Estimated return */}
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <div className="rounded-xl border border-slate-200 bg-white p-3">
-          <p className="text-[11px] text-slate-500">ROI (actual, lifetime)</p>
-          <p className="text-sm font-semibold text-violet-700">
-            {roiLifetime.toFixed(2)}%
-          </p>
-          <p className="text-[10px] text-slate-500 mt-1">
-            Dividends ÷ Contributed
-          </p>
-        </div>
-
-        <div className="rounded-xl border border-slate-200 bg-white p-3">
-          <p className="text-[11px] text-slate-500">
-            Estimated return (projection)
-          </p>
-          <p className="text-sm font-semibold text-sky-700">
-            {formatRM(est)}{" "}
-            <span className="text-[11px] text-slate-500 font-medium">
-              {estLabel}
-            </span>
-          </p>
-          <p className="text-[10px] text-slate-500 mt-1">
-            Uses expected rate only
-          </p>
-        </div>
-      </div>
-
-      {/* Goal progress */}
-      <div className="mt-4">
-        <div className="flex items-center justify-between text-[11px] text-slate-600">
-          <span className="font-semibold">Goal progress</span>
-          <span>{goal > 0 ? `${progress.toFixed(1)}%` : "No goal"}</span>
-        </div>
-        <div className="mt-2 h-2 rounded-full bg-slate-100 overflow-hidden">
-          <div
-            className="h-full rounded-full"
-            style={{
-              width: `${progress}%`,
-              background: `linear-gradient(90deg, ${acc.color || "#0ea5e9"}, #22c55e)`,
-            }}
-          />
-        </div>
-        {goal > 0 && (
-          <p className="mt-2 text-[11px] text-slate-500">
-            {formatRM(currentBalance)} / {formatRM(goal)}
-          </p>
-        )}
-      </div>
-
-      {/* Scoped view */}
-      <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
-        <p className="text-xs font-semibold text-slate-700 flex items-center gap-2">
-          <Calendar className="w-4 h-4" /> Selected period (actual)
-        </p>
-
-        <div className="mt-2 grid grid-cols-3 gap-2 text-[11px]">
-          <div className="rounded-lg border border-slate-200 bg-white p-2">
-            <p className="text-slate-500">Capital add</p>
-            <p className="font-semibold text-slate-900">{formatRM(scopeCap)}</p>
+      {/* Goal Progress */}
+      {goal > 0 && (
+        <div className="mb-4">
+          <div className="flex items-center justify-between text-xs text-slate-600 mb-2">
+            <span>Goal: {formatRM(goal)}</span>
+            <span>{progress.toFixed(0)}%</span>
           </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-2">
-            <p className="text-slate-500">Dividend</p>
-            <p className="font-semibold text-emerald-700">
-              {formatRM(scopeDiv)}
-            </p>
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white p-2">
-            <p className="text-slate-500">Withdraw</p>
-<p className="font-semibold text-rose-700">{formatRM(scopeW)}</p>
+          <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all"
+              style={{
+                width: `${progress}%`,
+                background: `linear-gradient(90deg, ${acc.color || "#0ea5e9"}, #22c55e)`,
+              }}
+            />
           </div>
         </div>
+      )}
 
-        <div className="mt-2 text-[11px] text-slate-500">
-          ROI (scoped): <b className="text-violet-700">{roiScope.toFixed(2)}%</b>
-        </div>
-      </div>
-
-      {/* Action buttons */}
-      <div className="mt-4 grid grid-cols-3 gap-2">
+      {/* Action Buttons */}
+      <div className="grid grid-cols-3 gap-2">
         <button
           type="button"
-          onClick={onAddCapital}
+          onClick={onAddDeposit}
           disabled={busy}
-          className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-sky-600 text-white text-sm font-semibold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          aria-label="Add capital"
+          className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-sky-600 text-white text-xs font-semibold hover:opacity-90 transition disabled:opacity-50"
         >
           <Plus className="w-4 h-4" />
-          Capital
+          Deposit
         </button>
 
         <button
           type="button"
-          onClick={onAddDividend}
+          onClick={onAddInterest}
           disabled={busy}
-          className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-sm font-semibold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          aria-label="Add dividend"
+          className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 text-white text-xs font-semibold hover:opacity-90 transition disabled:opacity-50"
         >
           <Trophy className="w-4 h-4" />
-          Dividend
+          Interest
         </button>
 
         <button
           type="button"
           onClick={onWithdraw}
           disabled={busy}
-          className="flex items-center justify-center gap-2 px-3 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 text-white text-sm font-semibold hover:opacity-90 transition disabled:opacity-50 disabled:cursor-not-allowed"
-          aria-label="Withdraw"
+          className="flex items-center justify-center gap-1 px-3 py-2 rounded-xl bg-gradient-to-r from-rose-500 to-red-600 text-white text-xs font-semibold hover:opacity-90 transition disabled:opacity-50"
         >
-          <MinusCircle className="w-4 h-4" />
+          <Target className="w-4 h-4" />
           Withdraw
         </button>
       </div>
     </div>
   );
 };
+
+const Segment = ({ value, onChange, options }) => (
+  <div className="inline-flex rounded-xl border border-slate-200 bg-white p-1">
+    {options.map((o) => (
+      <button
+        key={o.value}
+        type="button"
+        onClick={() => onChange(o.value)}
+        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+          value === o.value
+            ? "bg-slate-900 text-white"
+            : "text-slate-700 hover:bg-slate-50"
+        }`}
+      >
+        {o.label}
+      </button>
+    ))}
+  </div>
+);
 
 const Field = ({ label, children }) => (
   <div>
@@ -3650,24 +2375,17 @@ const Modal = ({ title, onClose, children }) => {
       onClick={onClose}
       role="dialog"
       aria-modal="true"
-      aria-labelledby="modal-title"
     >
       <div
-        className="bg-white rounded-2xl shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+        className="bg-white rounded-2xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between z-10">
-          <h2
-            id="modal-title"
-            className="text-xl font-bold text-[#0b1222] truncate"
-          >
-            {title}
-          </h2>
+          <h2 className="text-xl font-bold text-[#0b1222]">{title}</h2>
           <button
             type="button"
             onClick={onClose}
-            className="p-2 rounded-xl hover:bg-slate-100 transition shrink-0"
-            aria-label="Close modal"
+            className="p-2 rounded-xl hover:bg-slate-100 transition"
           >
             <X className="w-5 h-5 text-slate-700" />
           </button>
@@ -3680,12 +2398,8 @@ const Modal = ({ title, onClose, children }) => {
 };
 
 /* -------------------------------------------------------------------------- */
-/*                                Tailwind Classes                            */
+/*                              Tailwind Classes                              */
 /* -------------------------------------------------------------------------- */
 
-const SELECT_UI =
-  "w-full border border-slate-200 rounded-xl px-4 py-2.5 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-transparent transition disabled:opacity-50 disabled:cursor-not-allowed";
-
-const FILTER_SELECT =
-  "border border-slate-200 rounded-xl px-3 py-2 text-xs font-medium text-slate-700 bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 transition";
-
+const INPUT_CLASS =
+  "w-full border border-slate-300 rounded-xl px-4 py-2.5 text-sm text-slate-900 bg-white focus:outline-none focus:ring-2 focus:ring-sky-500 transition";

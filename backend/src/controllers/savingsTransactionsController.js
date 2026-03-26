@@ -1,115 +1,62 @@
-import SavingsAccount from "../models/SavingsAccount.js";
 import SavingsTransaction from "../models/SavingsTransaction.js";
-import { sanitize } from "../utils/sanitize.js";
+import SavingsAccount from "../models/SavingsAccount.js";
 import logger from "../utils/logger.js";
 
-const SORT_DESC = -1;
-const DEFAULT_PAGE_SIZE = 50;
-const MAX_PAGE_SIZE = 200;
+function safeNumber(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 ? n : fallback;
+}
 
 /**
- * List transactions with pagination and filters
+ * List transactions with optional filters
  */
 export async function listTransactions(req, res) {
-  const userId = req.user._id;
-
   try {
-    // Parse query params with validation
-    const year = parseInt(req.query.year);
-    if (!year || year < 2000 || year > 2100) {
-      return res.status(400).json({
-        message: "Valid year (2000-2100) is required",
-      });
+    const userId = req.user.id || req.user._id;
+    const { year, month, accountId } = req.query;
+
+    const query = { userId };
+
+    if (year) {
+      const numYear = parseInt(year);
+      if (numYear >= 2000 && numYear <= 2100) {
+        query.year = numYear;
+      }
     }
 
-    const month = req.query.month ? parseInt(req.query.month) : null;
-    if (month && (month < 1 || month > 12)) {
-      return res.status(400).json({
-        message: "Month must be between 1 and 12",
-      });
+    if (month) {
+      const numMonth = parseInt(month);
+      if (numMonth >= 1 && numMonth <= 12) {
+        query.month = numMonth;
+      }
     }
 
-    const accountId =
-      req.query.accountId && req.query.accountId !== "all"
-        ? req.query.accountId
-        : null;
-
-    // Validate accountId format if provided
-    if (accountId && !accountId.match(/^[0-9a-fA-F]{24}$/)) {
-      return res.status(400).json({
-        message: "Invalid account ID format",
-      });
+    if (accountId && accountId !== "all") {
+      query.accountId = accountId;
     }
 
-    // Pagination
-    const page = Math.max(1, parseInt(req.query.page) || 1);
-    const limit = Math.min(
-      MAX_PAGE_SIZE,
-      Math.max(1, parseInt(req.query.limit) || DEFAULT_PAGE_SIZE),
-    );
-    const skip = (page - 1) * limit;
-
-    // Build filter
-    const filter = { userId, year };
-    if (month) filter.month = month;
-    if (accountId) filter.accountId = accountId;
-
-    // Get total count for pagination
-    const total = await SavingsTransaction.countDocuments(filter);
-
-    // Use aggregation with $lookup for better performance
-    const transactions = await SavingsTransaction.aggregate([
-      { $match: filter },
-      {
-        $sort: {
-          year: SORT_DESC,
-          month: SORT_DESC,
-          day: SORT_DESC,
-          createdAt: SORT_DESC,
-        },
-      },
-      { $skip: skip },
-      { $limit: limit },
-      {
-        $lookup: {
-          from: "savingsaccounts",
-          localField: "accountId",
-          foreignField: "_id",
-          as: "account",
-        },
-      },
-      {
-        $addFields: {
-          accountName: { $arrayElemAt: ["$account.name", 0] },
-        },
-      },
-      {
-        $project: {
-          account: 0, // Remove the joined array
-        },
-      },
-    ]);
-
-    res.json({
-      transactions,
-      pagination: {
-        page,
-        limit,
-        total,
-        totalPages: Math.ceil(total / limit),
-        hasMore: page * limit < total,
-      },
+    const transactions = await SavingsTransaction.find(query).sort({
+      year: -1,
+      month: -1,
+      day: -1,
     });
+
+    // Populate account names
+    const accounts = await SavingsAccount.find({ userId });
+    const accountMap = {};
+    accounts.forEach((acc) => {
+      accountMap[acc._id.toString()] = acc.name;
+    });
+
+    const transactionsWithNames = transactions.map((tx) => ({
+      ...tx.toObject(),
+      accountName: accountMap[tx.accountId?.toString()] || "Unknown",
+    }));
+
+    res.json({ transactions: transactionsWithNames });
   } catch (error) {
-    logger.error("List transactions error:", {
-      userId,
-      error: error.message,
-      stack: error.stack,
-    });
-
-    res.status(500).json({
-      message: "Failed to fetch transactions",
-    });
+    logger.error("Error listing transactions:", error);
+    res.status(500).json({ message: "Failed to retrieve transactions" });
   }
 }
 
@@ -117,342 +64,170 @@ export async function listTransactions(req, res) {
  * Create a new transaction
  */
 export async function createTransaction(req, res) {
-  const userId = req.user._id;
-  const data = req.validatedBody; // ✅ Use validated data from middleware
-
   try {
-    // Verify account ownership
-    const account = await SavingsAccount.findOne({
-      _id: data.accountId,
-      userId,
-      deletedAt: null, // Don't allow transactions on deleted accounts
-    });
+    const userId = req.user.id || req.user._id;
+    const {
+      accountId,
+      type,
+      amount,
+      year,
+      month,
+      day,
+      dateISO,
+      status,
+      source,
+      notes,
+    } = req.body;
 
+    // Validate account exists
+    const account = await SavingsAccount.findOne({ _id: accountId, userId });
     if (!account) {
-      return res.status(404).json({
-        message: "Account not found or access denied",
-      });
+      return res.status(404).json({ message: "Account not found" });
     }
 
-    // Sanitize notes
-    const notes = sanitize(data.notes || "");
+    // Validate amount
+    const numAmount = safeNumber(amount);
+    if (numAmount <= 0) {
+      return res.status(400).json({ message: "Amount must be greater than 0" });
+    }
 
-    // Generate dateISO if not provided
-    let dateISO = data.dateISO;
-    if (!dateISO) {
-      const day = data.day || 1;
-      dateISO = new Date(Date.UTC(data.year, data.month - 1, day, 0, 0, 0));
+    // Validate type
+    if (!["capital_add", "dividend", "withdrawal"].includes(type)) {
+      return res.status(400).json({ message: "Invalid transaction type" });
+    }
+
+    // Validate year/month
+    const numYear = parseInt(year);
+    const numMonth = parseInt(month);
+    if (numYear < 2000 || numYear > 2100) {
+      return res.status(400).json({ message: "Invalid year" });
+    }
+    if (numMonth < 1 || numMonth > 12) {
+      return res.status(400).json({ message: "Invalid month" });
     }
 
     // Create transaction
-    const transaction = await SavingsTransaction.create({
+    const transaction = new SavingsTransaction({
       userId,
-      accountId: data.accountId,
-      type: data.type,
-      amount: data.amount,
-      year: data.year,
-      month: data.month,
-      day: data.day,
-      dateISO,
-      status: data.status || "completed",
-      source: data.source || "manual",
-      ruleId: data.ruleId,
-      notes,
+      accountId,
+      type,
+      amount: numAmount,
+      year: numYear,
+      month: numMonth,
+      day: day ? parseInt(day) : undefined,
+      dateISO: dateISO || new Date().toISOString(),
+      status: status || "completed",
+      source: source || "manual",
+      notes: notes ? String(notes).substring(0, 500) : undefined,
     });
 
-    // Audit log
-    logger.info("Transaction created", {
-      userId,
-      accountId: data.accountId,
-      accountName: account.name,
-      transactionId: transaction._id,
-      type: data.type,
-      amount: data.amount,
-      status: transaction.status,
-      source: transaction.source,
-      ip: req.ip,
-      userAgent: req.get("user-agent"),
-    });
+    await transaction.save();
 
-    res.status(201).json({
-      transaction,
-      message: "Transaction created successfully",
-    });
+    logger.info(`Savings transaction created: ${transaction._id} by user ${userId}`);
+    res.status(201).json({ transaction });
   } catch (error) {
-    logger.error("Create transaction error:", {
-      userId,
-      error: error.message,
-      stack: error.stack,
-      data,
-    });
-
-    // Handle validation errors
-    if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map((e) => e.message);
-      return res.status(400).json({
-        message: messages.join(", "),
-        errors: error.errors,
-      });
-    }
-
-    // Handle duplicate key errors (for recurring transactions)
-    if (error.code === 11000) {
-      return res.status(409).json({
-        message: "Transaction already exists for this period",
-      });
-    }
-
-    res.status(500).json({
-      message: "Failed to create transaction",
-    });
+    logger.error("Error creating transaction:", error);
+    res.status(500).json({ message: "Failed to create transaction" });
   }
 }
 
 /**
- * Update transaction (limited fields)
+ * Update a transaction (mainly for status changes)
  */
-export async function patchTransaction(req, res) {
-  const userId = req.user._id;
-  const { id } = req.params;
-
+export async function updateTransaction(req, res) {
   try {
-    // Validate transaction ID format
-    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
-      return res.status(400).json({
-        message: "Invalid transaction ID format",
-      });
-    }
+    const userId = req.user.id || req.user._id;
+    const { id } = req.params;
+    const { status, amount, notes } = req.body;
 
-    const transaction = await SavingsTransaction.findOne({
-      _id: id,
-      userId,
-    });
-
+    const transaction = await SavingsTransaction.findOne({ _id: id, userId });
     if (!transaction) {
-      return res.status(404).json({
-        message: "Transaction not found",
-      });
+      return res.status(404).json({ message: "Transaction not found" });
     }
 
-    // Validate status change
-    if (req.body.status) {
-      if (!["pending", "completed"].includes(req.body.status)) {
-        return res.status(400).json({
-          message: "Status must be 'pending' or 'completed'",
-        });
-      }
-
-      // Business rule: Only allow pending -> completed
-      // Don't allow completed -> pending (would mess up calculations)
-      if (transaction.status === "completed" && req.body.status === "pending") {
-        return res.status(400).json({
-          message: "Cannot change completed transaction back to pending",
-        });
-      }
-
-      const oldStatus = transaction.status;
-      transaction.status = req.body.status;
-
-      // Audit log for status changes
-      logger.info("Transaction status changed", {
-        userId,
-        transactionId: id,
-        oldStatus,
-        newStatus: req.body.status,
-        type: transaction.type,
-        amount: transaction.amount,
-        source: transaction.source,
-        ip: req.ip,
-      });
+    // Update fields
+    if (status && ["pending", "completed"].includes(status)) {
+      transaction.status = status;
     }
 
-    // Allow notes update
-    if (typeof req.body.notes === "string") {
-      transaction.notes = sanitize(req.body.notes.substring(0, 500));
+    if (amount !== undefined) {
+      const numAmount = safeNumber(amount);
+      if (numAmount <= 0) {
+        return res.status(400).json({ message: "Amount must be greater than 0" });
+      }
+      transaction.amount = numAmount;
+    }
+
+    if (notes !== undefined) {
+      transaction.notes = notes ? String(notes).substring(0, 500) : undefined;
     }
 
     await transaction.save();
 
-    res.json({
-      transaction,
-      message: "Transaction updated successfully",
-    });
+    logger.info(`Savings transaction updated: ${transaction._id} by user ${userId}`);
+    res.json({ transaction });
   } catch (error) {
-    logger.error("Patch transaction error:", {
-      userId,
-      transactionId: id,
-      error: error.message,
-      stack: error.stack,
-    });
-
-    if (error.name === "ValidationError") {
-      const messages = Object.values(error.errors).map((e) => e.message);
-      return res.status(400).json({
-        message: messages.join(", "),
-      });
-    }
-
-    res.status(500).json({
-      message: "Failed to update transaction",
-    });
+    logger.error("Error updating transaction:", error);
+    res.status(500).json({ message: "Failed to update transaction" });
   }
 }
 
 /**
- * Delete transaction (soft delete recommended)
+ * Delete a transaction
  */
 export async function deleteTransaction(req, res) {
-  const userId = req.user._id;
-  const { id } = req.params;
-
   try {
-    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
-      return res.status(400).json({
-        message: "Invalid transaction ID format",
-      });
-    }
+    const userId = req.user.id || req.user._id;
+    const { id } = req.params;
 
-    const transaction = await SavingsTransaction.findOne({
-      _id: id,
-      userId,
-    });
-
+    const transaction = await SavingsTransaction.findOne({ _id: id, userId });
     if (!transaction) {
-      return res.status(404).json({
-        message: "Transaction not found",
-      });
+      return res.status(404).json({ message: "Transaction not found" });
     }
 
-    // Business rule: Don't allow deleting completed recurring transactions
-    if (
-      transaction.source === "recurring" &&
-      transaction.status === "completed"
-    ) {
-      return res.status(400).json({
-        message:
-          "Cannot delete completed recurring transactions. Please contact support.",
-      });
-    }
+    await SavingsTransaction.deleteOne({ _id: id });
 
-    // Audit log BEFORE deletion
-    logger.warn("Transaction deleted", {
-      userId,
-      transactionId: id,
-      accountId: transaction.accountId,
-      type: transaction.type,
-      amount: transaction.amount,
-      status: transaction.status,
-      source: transaction.source,
-      year: transaction.year,
-      month: transaction.month,
-      ip: req.ip,
-    });
-
-    await transaction.deleteOne();
-
-    res.json({
-      ok: true,
-      message: "Transaction deleted successfully",
-    });
+    logger.info(`Savings transaction deleted: ${id} by user ${userId}`);
+    res.json({ message: "Transaction deleted successfully" });
   } catch (error) {
-    logger.error("Delete transaction error:", {
-      userId,
-      transactionId: id,
-      error: error.message,
-      stack: error.stack,
-    });
-
-    res.status(500).json({
-      message: "Failed to delete transaction",
-    });
+    logger.error("Error deleting transaction:", error);
+    res.status(500).json({ message: "Failed to delete transaction" });
   }
 }
 
 /**
- * Bulk confirm pending transactions
+ * Bulk confirm multiple pending transactions
  */
 export async function bulkConfirmTransactions(req, res) {
-  const userId = req.user._id;
-
   try {
+    const userId = req.user.id || req.user._id;
     const { transactionIds } = req.body;
 
-    // Validation
     if (!Array.isArray(transactionIds) || transactionIds.length === 0) {
-      return res.status(400).json({
-        message: "transactionIds array is required and cannot be empty",
-      });
+      return res.status(400).json({ message: "transactionIds array is required" });
     }
 
-    if (transactionIds.length > 50) {
-      return res.status(400).json({
-        message: "Cannot confirm more than 50 transactions at once",
-      });
-    }
-
-    // Validate all IDs are valid MongoDB ObjectIDs
-    const invalidIds = transactionIds.filter(
-      (id) => !id.match(/^[0-9a-fA-F]{24}$/)
-    );
-    if (invalidIds.length > 0) {
-      return res.status(400).json({
-        message: `Invalid transaction ID format: ${invalidIds.join(", ")}`,
-      });
-    }
-
-    // Find all transactions that belong to this user and are pending
-    const transactions = await SavingsTransaction.find({
-      _id: { $in: transactionIds },
-      userId,
-      status: "pending",
-    });
-
-    if (transactions.length === 0) {
-      return res.status(404).json({
-        message: "No pending transactions found to confirm",
-      });
-    }
-
-    // Update all to completed
-    const updateResults = await Promise.all(
-      transactions.map(async (tx) => {
-        tx.status = "completed";
-        await tx.save();
-        return {
-          id: tx._id,
-          accountId: tx.accountId,
-          type: tx.type,
-          amount: tx.amount,
-          year: tx.year,
-          month: tx.month,
-        };
-      })
+    // Update all matching transactions
+    const result = await SavingsTransaction.updateMany(
+      {
+        _id: { $in: transactionIds },
+        userId,
+        status: "pending",
+      },
+      {
+        $set: { status: "completed" },
+      }
     );
 
-    // Audit log
-    logger.info("Bulk confirm transactions", {
-      userId,
-      count: updateResults.length,
-      transactionIds: updateResults.map((r) => r.id),
-      totalAmount: updateResults.reduce((sum, r) => sum + r.amount, 0),
-      ip: req.ip,
-      userAgent: req.get("user-agent"),
-    });
-
+    logger.info(
+      `Bulk confirmed ${result.modifiedCount} transactions for user ${userId}`
+    );
     res.json({
-      message: `${updateResults.length} transaction${updateResults.length > 1 ? "s" : ""} confirmed successfully`,
-      confirmed: updateResults.length,
-      transactions: updateResults,
+      message: `${result.modifiedCount} transaction(s) confirmed`,
+      confirmed: result.modifiedCount,
     });
   } catch (error) {
-    logger.error("Bulk confirm transactions error:", {
-      userId,
-      error: error.message,
-      stack: error.stack,
-    });
-
-    res.status(500).json({
-      message: "Failed to bulk confirm transactions",
-    });
+    logger.error("Error bulk confirming transactions:", error);
+    res.status(500).json({ message: "Failed to confirm transactions" });
   }
 }
